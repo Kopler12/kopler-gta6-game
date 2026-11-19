@@ -1,99 +1,88 @@
 # SAN VERANO: Neon Coast
 
-[![make.fun · gta6-01](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
-[![rank](https://make.fun/badge/gta6-01/Kopler12/kopler-gta6-game/rank.svg)](https://make.fun/bounty/gta6-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
-[![reward](https://make.fun/badge/gta6-01/Kopler12/kopler-gta6-game/reward.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+An original top-down open-world crime game for desktop Chrome. You arrive in
+San Verano — a sun-baked, neon-lit coastal city of palm avenues, beach kiosks
+and back-alley deals — with $120, a borrowed pistol, and a cousin named Rosa
+who always has one more job.
 
-An original top-down open-world crime game that runs entirely in the browser.
-No assets, no network requests at runtime: every building, car, palm tree and
-neon sign is drawn with Canvas 2D, and every engine growl, siren and gunshot is
-synthesized live with WebAudio.
+## Story pitch
 
-## The pitch
-
-You arrive in **San Verano**, a sun-bleached coastal city of deco hotels, surf
-shacks, casinos and one very awake police force — the SVPD. Your cousin Rosa
-puts you to work. Diego "El Faro" Ruiz moves packages nobody asks about. Vera
-Kane collects debts in scarlet roadsters. Marco Sol just wants his beach back.
-Run their jobs, steal what you need, outrun five stars of heat, and by the
-finale the whole neon coast knows your name.
+Rosa, Diego, Vera and Marco pull you through six story missions: a first
+drive to the beach, a crate delivery, a courier chase, a dockside shootout, a
+90-second medicine run, and a five-star finale — steal the downtown cash van
+and make it back to Rosa's safehouse. Between missions, run repeatable taxi
+fares for cash, hunt cash crates, and try to keep the SVPD off your tail.
 
 ## Features
 
-- **A dense living city** — a 14×11 road grid with intersections, sidewalks,
-  lane markings, ~150 named buildings (Hotel Coral, Casino Sol, Verano Bank,
-  Club Azul…), parks, palm trees, street lamps, crates, parked cars, a sandy
-  beach and open water on the east edge, plus a hospital, police station and
-  safehouse.
-- **On foot & driving** — walk, sprint, punch, shoot; press E to enter *any*
-  car (stealing raises your wanted level). Arcade driving with acceleration,
-  braking, reverse, handbrake drifts, skid marks, damage states with smoke,
-  and headlights after dark.
-- **Traffic & pedestrians** — AI cars cruise the road network, queue behind
-  each other and turn at intersections; pedestrians stroll the sidewalks,
-  panic and flee gunfire, and can be scared, punched or run over.
-- **Wanted system & police** — 0–5 stars for theft, assault, gunfire and hits.
-  SVPD patrol cars pursue and ram you; officers on foot chase and shoot at
-  2+ stars. Break line of sight and the heat decays. Get **BUSTED** or
-  **WASTED** and you respawn at the police station or hospital, poorer.
-- **Combat** — fists (F), a pistol, and a findable SMG with rapid fire,
-  muzzle flash, particles, screen shake, health/ammo pickups and delivery
-  crates scattered across the city.
-- **Story chain — 6 missions** with dialogue from four named characters:
-  a first drive, a package pickup, a car chase, a beach shootout, a
-  90-second timed run, and a five-star finale. Mission markers, HUD
-  objectives, cash rewards, fail/retry, autosave after every mission.
-- **Side money** — repeatable taxi fares and gold delivery crates.
-- **Full HUD** — health, cash, wanted stars, weapon & ammo, objective line,
-  day/clock with a full day-night tint cycle, and a live minimap with streets,
-  police blips, mission markers and your heading arrow.
-- **Screens & save** — animated title screen, New Game / Continue, pause menu
-  (resume / save / restart / title), mission dialogue cards, wasted/busted
-  screens, and a `localStorage` save of cash, story progress, position,
-  weapons and stats.
-- **Sound** — synthesized engine, sirens, shots, crashes, pickups and a
-  looping bass-and-lead music groove. Press **M** to mute.
+- Dense explorable city: road grid with intersections, sidewalks, ~90 named
+  buildings, waterfront and beach, parks, lamps, palms and crates, parked
+  cars, hospital, police HQ and safehouse; smooth follow camera over a world
+  far bigger than one screen
+- On foot: WASD / arrows, Shift sprint, building and water collision
+- Driving: enter/exit any car with E (stealing raises wanted), arcade physics,
+  Space handbrake, skid marks, damage with smoke at low health, headlights
+  at night
+- Traffic AI that follows the road network, stops at intersections and avoids
+  obstacles; pedestrians who stroll the sidewalks and flee gunfire
+- Wanted system 0–5 stars for theft, assault, shooting and collisions; stars
+  decay out of sight. Police cars pursue, foot cops chase and shoot at 2+
+  stars; BUSTED / WASTED respawns at the police station / hospital with a
+  cash penalty
+- Combat: punch (F), pistol with limited ammo (mouse aim + click), muzzle
+  flash and particles, plus a findable SMG (key 2); health, ammo and cash
+  pickups across the city
+- Six-mission story chain with dialogue boxes, world + minimap markers,
+  objective text, rewards, fail/retry and autosave; repeatable taxi fares
+- HUD: health (and car health), cash, wanted stars, weapon + ammo, objective,
+  day clock with day–dusk–night tint cycle, live minimap with streets, player
+  arrow, mission marker and police blips
+- Animated title screen with New Game / Continue, pause menu, wasted/busted
+  screens, localStorage saves, WebAudio synthesized engine, sirens, gunshots
+  and a music loop (M to mute), screen shake and a delta-time 60 fps loop
 
 ## Controls
 
-| Action | Keys |
+| Key | Action |
 | --- | --- |
-| Move / drive | WASD or arrow keys |
-| Sprint | Shift |
-| Enter / exit car, talk to mission giver | E |
-| Punch | F |
-| Shoot | Mouse aim + click (hold for SMG) |
-| Switch weapon | 1 pistol · 2 SMG |
-| Handbrake | Space |
-| Pause | Esc or P |
-| Advance dialogue | Enter |
-| Mute | M |
+| WASD / Arrows | Walk / drive |
+| Shift | Sprint |
+| E | Enter / exit car, advance dialogue |
+| F or mouse click | Punch (F) / shoot (click, on foot) |
+| Space | Handbrake (in car), advance dialogue |
+| 1 / 2 | Pistol / SMG |
+| T | Start a taxi fare (when free roaming) |
+| Esc / P | Pause |
+| M | Mute |
 
 ## How to run
 
-```sh
-node serve.ts            # serves game/ on http://localhost:8080
-# or: node serve.ts --port 9000
+Requires Node 22 (standard library only, nothing to install):
+
+```
+node serve.ts
 ```
 
-Then open the URL in desktop Chrome. Everything is plain static files under
-`game/` (`index.html` + ES modules in `game/src/`), so any static file server
-works too. Deterministic screenshot scenes are available via URL parameters,
-e.g. `?shot=chase&seed=1` (scenes: `cover`, `drive`, `chase`, `mission`).
+Then open http://localhost:8080 in desktop Chrome. The game is plain static
+files under `game/` and makes no network requests at runtime.
+
+To build the hand-in dossier:
+
+```
+mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
+```
 
 ## Tech notes
 
-- Canvas 2D rendering with a delta-time loop and a smooth follow camera.
-- The city is procedurally generated from a seed (`game/src/world.js`):
-  roads, collision solids, beach/water zones and named buildings.
-- Traffic uses lane-following with intersection turns and simple
-  look-ahead braking; police use pursuit steering; pedestrians use a small
-  state machine (walk / flee / hostile / chase).
-- Audio is 100% WebAudio synthesis (`game/src/audio.js`) — oscillators and
-  filtered noise bursts, no audio files.
-- Saves live in `localStorage` under `sanverano-save-v1`.
+- Plain canvas 2D + ES modules (`game/src/world.js`, `audio.js`,
+  `missions.js`, `main.js`); all art is drawn with canvas calls and all sound
+  is synthesized with WebAudio — no external assets
+- Deterministic screenshot scenes: `?shot=cover|drive|chase|mission&seed=1`
+- Saves live in localStorage under `sanverano-save-v1`
 
 ## License
 
-MIT — see `LICENSE`. SAN VERANO: Neon Coast is an original work; all names,
-places, characters and art in the game were created for this entry.
+MIT — see `LICENSE`.
+[![make.fun · gta6-01](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+[![rank](https://make.fun/badge/gta6-01/Kopler12/kopler-gta6-game/rank.svg)](https://make.fun/bounty/gta6-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+[![reward](https://make.fun/badge/gta6-01/Kopler12/kopler-gta6-game/reward.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
