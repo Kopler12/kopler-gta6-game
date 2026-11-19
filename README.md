@@ -1,5 +1,9 @@
 # SAN VERANO: Neon Coast
 
+[![make.fun · gta6-01](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+[![rank](https://make.fun/badge/gta6-01/Kopler12/kopler-gta6-game/rank.svg)](https://make.fun/bounty/gta6-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+[![reward](https://make.fun/badge/gta6-01/Kopler12/kopler-gta6-game/reward.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+
 An original top-down open-world crime game that runs entirely in the browser.
 No assets, no network requests at runtime: every building, car, palm tree and
 neon sign is drawn with Canvas 2D, and every engine growl, siren and gunshot is
