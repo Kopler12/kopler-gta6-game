@@ -1,116 +1,113 @@
-// SAN VERANO world generation: city grid, buildings, props, pickups.
-export const WORLD_W = 3600, WORLD_H = 2800;
-export const ROAD = 130, BLOCK = 430;
-export function mulberry(seed) { let a = seed >>> 0; return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
-export function isRoad(x, y) {
-  const mx = ((x % BLOCK) + BLOCK) % BLOCK, my = ((y % BLOCK) + BLOCK) % BLOCK;
-  return mx < ROAD || my < ROAD;
+// SAN VERANO world generation — deterministic city layout.
+// World is 3200 x 2400. Roads on a grid, beach along the south edge.
+export const WORLD_W = 3200, WORLD_H = 2400;
+export const ROAD_XS = [200, 700, 1200, 1700, 2200, 2700];
+export const ROAD_YS = [200, 650, 1100, 1550, 1950];
+export const ROAD_W = 110;
+export const BEACH_Y = 2120;
+
+export function mulberry(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
 }
-export function isWater(x, y) { return x > 3160; }
-export function isBeach(x, y) { return x > 3000 && x <= 3160; }
-const NAMES = ['Cafe Sol', 'Hotel Mar', 'Taco Luna', 'Club Neon', 'Banka Azul', 'Farmacia Vida', 'Taller Ruiz', 'Joyeria Oro', 'Pizza Costa', 'Bar Palma', 'Gym Titan', 'Libreria Sol', 'Floristeria', 'Mercado Central', 'Cine Verano', 'Dulce Bakery', 'Marina Store', 'Optica Luz', 'Barberia Leo', 'Lavanderia', 'Tienda Maya', 'Restaurante Ola', 'Zapateria', 'Dental Care', 'Vet Amigo', 'Foto Studio', 'Deli Fresh', 'Sushi Mar', 'Burger Bay', 'Heladeria'];
-const COLORS = ['#e8b4b8', '#f4d35e', '#8ecae6', '#ffb703', '#90be6d', '#f28482', '#84a98c', '#e07a5f', '#81b29a', '#f2cc8f', '#cdb4db', '#ffc8dd'];
-export function buildWorld(seed = 1) {
-  const rnd = mulberry(seed * 7919 + 13);
+
+const BUILDING_NAMES = [
+  ['Hotel Solmar', '#e8b4d8'], ['Neon Palms Hotel', '#7ee8fa'], ['Banco Verano', '#ffd166'],
+  ['Cafe Ola', '#f4a261'], ['Taco Costa', '#e76f51'], ['Gym Titan', '#a8dadc'],
+  ['Clinica Vida', '#ffffff'], ['Farmacia Sol', '#b7e4c7'], ['Club Marea', '#c77dff'],
+  ['Bar El Faro', '#ffb703'], ['Oficinas Coral', '#90e0ef'], ['Apartamentos Brisa', '#f9c6d3'],
+  ['Taller Ruedas', '#adb5bd'], ['Joyeria Perla', '#ffe5ec'], ['Libreria Mar', '#a2d2ff'],
+  ['Pizzeria Napoli', '#ffafcc'], ['Mercado Central', '#ffc8dd'], ['Cine Verano', '#bdb2ff'],
+  ['Tatuajes Ink', '#caffbf'], ['Floristeria Rosa', '#ffadad'], ['Panaderia Luna', '#fdffb6'],
+  ['Hotel Coral Bay', '#9bf6ff'], ['Casino Arena', '#ffbe0b'], ['Discoteca Ola', '#fb5607'],
+  ['Restaurante Mar', '#3a86ff'], ['Tienda Surf', '#8338ec'], ['Oficina Portuaria', '#ff006e'],
+  ['Condos Altamar', '#06d6a0'], ['Barberia Cortez', '#118ab2'], ['Lavanderia Azul', '#073b4c'],
+  ['Escuela Verano', '#ef476f'], ['Biblioteca Publica', '#ffd166'], ['Museo del Mar', '#06d6a0'],
+  ['Estacion Radio', '#118ab2'], ['Hotel Vista', '#e0aaff'], ['Cafe Neon', '#10002b'],
+  ['Galeria Arte', '#5a189a'], ['Supermercado Dia', '#3a0ca3'], ['Torre Mirador', '#4361ee'],
+  ['Residencial Palmera', '#4cc9f0'], ['Clinica Dental', '#f72585'], ['Taller Naval', '#7209b7'],
+  ['Pension Marisol', '#560bad'], ['Rooftop Bar Nube', '#480ca8'], ['Tienda Licores', '#b5179e'],
+];
+
+export function buildWorld(seed) {
+  const rnd = mulberry(seed || 1);
   const buildings = [], props = [], pickups = [], parked = [];
-  let ni = 0;
-  for (let bx = 0; bx < 8; bx++) for (let by = 0; by < 6; by++) {
-    const ox = bx * BLOCK + ROAD + 14, oy = by * BLOCK + ROAD + 14;
-    if (ox > 2950) continue;
-    const bw = BLOCK - ROAD - 28, bh = BLOCK - ROAD - 28;
-    const special = (bx === 1 && by === 1) ? 'POLICE STATION' : (bx === 5 && by === 1) ? 'HOSPITAL' : (bx === 2 && by === 4) ? 'SAFEHOUSE' : (bx === 4 && by === 3) ? 'PARK' : null;
-    if (special === 'PARK') { buildings.push({ x: ox, y: oy, w: bw, h: bh, park: true, name: 'Parque Central', color: '#3a7d44' }); continue; }
-    if (special) { buildings.push({ x: ox, y: oy, w: bw, h: bh, name: special, color: special === 'POLICE STATION' ? '#5b7fa6' : special === 'HOSPITAL' ? '#eef2f5' : '#d9a05b', special: true }); continue; }
-    const n = 2 + Math.floor(rnd() * 2);
-    for (let i = 0; i < n; i++) {
-      const w = bw / n - 10, h = bh * (0.55 + rnd() * 0.4);
-      buildings.push({ x: ox + i * (bw / n) + 5, y: oy + (bh - h) / 2, w, h, name: NAMES[ni++ % NAMES.length], color: COLORS[Math.floor(rnd() * COLORS.length)], floors: 2 + Math.floor(rnd() * 6) });
+  const specials = [
+    { x: 950, y: 875, w: 260, h: 170, name: 'POLICE STATION', color: '#3a5a8c', kind: 'police' },
+    { x: 1950, y: 425, w: 260, h: 170, name: 'HOSPITAL', color: '#e8e8e8', kind: 'hospital' },
+    { x: 950, y: 1325, w: 180, h: 140, name: 'SAFEHOUSE - CASA ROSA', color: '#e07a5f', kind: 'safehouse' },
+    { x: 2450, y: 1325, w: 240, h: 160, name: 'AMMO & GEAR', color: '#606c38', kind: 'shop' },
+  ];
+  for (const s of specials) buildings.push(s);
+  let bi = 0;
+  for (let gx = 0; gx < ROAD_XS.length - 1; gx++) {
+    for (let gy = 0; gy < ROAD_YS.length - 1; gy++) {
+      const bx = ROAD_XS[gx] + ROAD_W / 2, by = ROAD_YS[gy] + ROAD_W / 2;
+      const bw = ROAD_XS[gx + 1] - ROAD_XS[gx] - ROAD_W, bh = ROAD_YS[gy + 1] - ROAD_YS[gy] - ROAD_W;
+      // park in one block
+      if (gx === 3 && gy === 1) { buildings.push({ x: bx + bw / 2, y: by + bh / 2, w: bw, h: bh, name: 'PARQUE CENTRAL', color: '#2d6a4f', kind: 'park', cx: bx + bw / 2, cy: by + bh / 2 }); continue; }
+      if (gx === 1 && gy === 2) { buildings.push({ x: bx + bw / 2, y: by + bh / 2, w: bw, h: bh, name: 'PLAZA PALMERAS', color: '#40916c', kind: 'park', cx: bx + bw / 2, cy: by + bh / 2 }); continue; }
+      const cols = 2, rows = 2;
+      for (let cx = 0; cx < cols; cx++) for (let cy = 0; cy < rows; cy++) {
+        const w = bw / cols - 26, h = bh / rows - 26;
+        const x = bx + (cx + 0.5) * (bw / cols), y = by + (cy + 0.5) * (bh / rows);
+        const overlaps = specials.some(s => Math.abs(x - s.x) < (w + s.w) / 2 + 8 && Math.abs(y - s.y) < (h + s.h) / 2 + 8);
+        if (overlaps) continue;
+        const nm = BUILDING_NAMES[bi % BUILDING_NAMES.length]; bi++;
+        buildings.push({ x, y, w, h, name: nm[0], color: nm[1], kind: 'building', floors: 2 + ((rnd() * 6) | 0), shade: 0.85 + rnd() * 0.3 });
+      }
     }
   }
-  for (let i = 0; i < 160; i++) {
-    const x = 60 + rnd() * 2900, y = 40 + rnd() * 2700;
-    if (!isRoad(x, y)) continue;
-    props.push({ x, y, type: rnd() < 0.5 ? 'lamp' : 'palm' });
+  // props: lamps at intersections, palms on beach + parks, crates in alleys
+  for (const rx of ROAD_XS) for (const ry of ROAD_YS) {
+    props.push({ type: 'lamp', x: rx - ROAD_W / 2 - 10, y: ry - ROAD_W / 2 - 10 });
+    props.push({ type: 'lamp', x: rx + ROAD_W / 2 + 10, y: ry + ROAD_W / 2 + 10 });
   }
-  for (let i = 0; i < 40; i++) props.push({ x: 3050 + rnd() * 100, y: 60 + rnd() * 2600, type: 'palm' });
-  for (let i = 0; i < 26; i++) props.push({ x: 200 + rnd() * 2700, y: 100 + rnd() * 2500, type: 'crate' });
-  const pk = [['health', 12], ['ammo', 12], ['cash', 14], ['smg', 2]];
-  for (const [type, count] of pk) for (let i = 0; i < count; i++) {
-    let x, y, tries = 0;
-    do { x = 120 + rnd() * 2800; y = 120 + rnd() * 2500; tries++; } while (tries < 20 && buildings.some(b => !b.park && x > b.x - 20 && x < b.x + b.w + 20 && y > b.y - 20 && y < b.y + b.h + 20));
-    pickups.push({ x, y, type, taken: false, respawn: 0 });
-  }
-  const carColors = ['#e63946', '#457b9d', '#f1fa8c', '#2a9d8f', '#e9c46a', '#ffffff', '#22223b', '#9d4edd', '#ff7b00', '#4cc9f0'];
+  for (let x = 80; x < WORLD_W - 60; x += 90 + rnd() * 80) props.push({ type: 'palm', x, y: BEACH_Y + 40 + rnd() * 60, s: 0.8 + rnd() * 0.5 });
+  for (let i = 0; i < 26; i++) props.push({ type: 'palm', x: 200 + rnd() * (WORLD_W - 400), y: 200 + rnd() * 1600, s: 0.8 + rnd() * 0.5 });
+  for (let i = 0; i < 30; i++) props.push({ type: 'crate', x: 150 + rnd() * (WORLD_W - 300), y: 150 + rnd() * 1800 });
+  // pickups: health, ammo, cash crates, SMG
+  const spots = [[760, 720], [1260, 1160], [1760, 720], [2260, 1620], [760, 1620], [2760, 1620], [1260, 260], [2260, 260], [1760, 1620], [500, 1100]];
+  spots.forEach((s, i) => pickups.push({ type: i % 3 === 0 ? 'health' : (i % 3 === 1 ? 'ammo' : 'cash'), x: s[0], y: s[1], taken: false, respawn: 0 }));
+  pickups.push({ type: 'smg', x: 2450, y: 1445, taken: false, respawn: 0 });
+  pickups.push({ type: 'health', x: 1950, y: 545, taken: false, respawn: 0 });
+  pickups.push({ type: 'cash', x: 830, y: 1620, taken: false, respawn: 0 });
+  // parked cars along roads
+  const carColors = ['#e63946', '#457b9d', '#f1fa8c', '#2a9d8f', '#e9c46a', '#9d4edd', '#ffffff', '#22223b', '#fb8500', '#06d6a0'];
   for (let i = 0; i < 34; i++) {
-    let x, y, tries = 0;
-    do { x = 100 + rnd() * 2900; y = 80 + rnd() * 2600; tries++; } while (tries < 30 && !isRoad(x, y));
-    const horiz = ((y % BLOCK) < ROAD);
-    parked.push({ x, y, angle: horiz ? (rnd() < 0.5 ? 0 : Math.PI) : (rnd() < 0.5 ? Math.PI / 2 : -Math.PI / 2), color: carColors[i % carColors.length] });
-  }
-  return { buildings, props, pickups, parked, policeStation: { x: 760, y: 760 }, hospital: { x: 2320, y: 760 }, safehouse: { x: 1230, y: 2020 } };
-}
-export function collideRect(x, y, r, buildings) {
-  for (const b of buildings) { if (b.park) continue; if (x + r > b.x && x - r < b.x + b.w && y + r > b.y && y - r < b.y + b.h) return b; }
-  return null;
-}
-export function drawWorld(ctx, cam, w, h, timeOfDay, world) {
-  const x0 = cam.x - 60, y0 = cam.y - 60, x1 = cam.x + w + 60, y1 = cam.y + h + 60;
-  ctx.fillStyle = '#7a9e7e'; ctx.fillRect(0, 0, w, h);
-  ctx.save(); ctx.translate(-cam.x, -cam.y);
-  // water + beach
-  ctx.fillStyle = '#f2d492'; ctx.fillRect(3000, 0, 160, WORLD_H);
-  ctx.fillStyle = '#1d7fa8'; ctx.fillRect(3160, 0, WORLD_W - 3160, WORLD_H);
-  ctx.fillStyle = 'rgba(255,255,255,0.25)';
-  for (let y = 20; y < WORLD_H; y += 90) ctx.fillRect(3180 + Math.sin(y * 0.05) * 8, y, 380, 5);
-  // blocks base
-  ctx.fillStyle = '#b8b2a7';
-  for (let bx = 0; bx < 9; bx++) for (let by = 0; by < 7; by++) ctx.fillRect(bx * BLOCK + ROAD, by * BLOCK + ROAD, BLOCK - ROAD, BLOCK - ROAD);
-  // roads
-  ctx.fillStyle = '#3d3d44';
-  for (let i = 0; i < 9; i++) ctx.fillRect(i * BLOCK, 0, ROAD, WORLD_H);
-  for (let i = 0; i < 7; i++) ctx.fillRect(0, i * BLOCK, WORLD_W, ROAD);
-  ctx.strokeStyle = '#f7d154'; ctx.lineWidth = 3; ctx.setLineDash([24, 20]);
-  for (let i = 0; i < 9; i++) { ctx.beginPath(); ctx.moveTo(i * BLOCK + ROAD / 2, 0); ctx.lineTo(i * BLOCK + ROAD / 2, WORLD_H); ctx.stroke(); }
-  for (let i = 0; i < 7; i++) { ctx.beginPath(); ctx.moveTo(0, i * BLOCK + ROAD / 2); ctx.lineTo(3000, i * BLOCK + ROAD / 2); ctx.stroke(); }
-  ctx.setLineDash([]);
-  // crosswalks
-  ctx.fillStyle = 'rgba(255,255,255,0.5)';
-  for (let i = 0; i < 9; i++) for (let j = 0; j < 7; j++) { for (let s = 0; s < 4; s++) ctx.fillRect(i * BLOCK + 8 + s * 30, j * BLOCK + 4, 16, 6); }
-  // buildings
-  for (const b of world.buildings) {
-    if (b.x + b.w < x0 || b.x > x1 || b.y + b.h < y0 || b.y > y1) continue;
-    if (b.park) {
-      ctx.fillStyle = '#4a9e57'; ctx.fillRect(b.x, b.y, b.w, b.h);
-      ctx.fillStyle = '#2f6b3a';
-      for (let t = 0; t < 8; t++) { const tx = b.x + 30 + ((t * 97) % (b.w - 60)), ty = b.y + 30 + ((t * 61) % (b.h - 60)); ctx.beginPath(); ctx.arc(tx, ty, 16, 0, 7); ctx.fill(); }
-      ctx.fillStyle = '#fff'; ctx.font = 'bold 15px sans-serif'; ctx.textAlign = 'center'; ctx.fillText(b.name, b.x + b.w / 2, b.y + b.h / 2);
-      continue;
+    const vertical = rnd() > 0.5;
+    if (vertical) {
+      const rx = ROAD_XS[(rnd() * ROAD_XS.length) | 0];
+      parked.push({ x: rx + (rnd() > 0.5 ? -ROAD_W / 2 + 18 : ROAD_W / 2 - 18), y: 150 + rnd() * 1850, angle: Math.PI / 2, color: carColors[(rnd() * carColors.length) | 0] });
+    } else {
+      const ry = ROAD_YS[(rnd() * ROAD_YS.length) | 0];
+      parked.push({ x: 150 + rnd() * 2900, y: ry + (rnd() > 0.5 ? -ROAD_W / 2 + 18 : ROAD_W / 2 - 18), angle: 0, color: carColors[(rnd() * carColors.length) | 0] });
     }
-    ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.fillRect(b.x + 6, b.y + 8, b.w, b.h);
-    ctx.fillStyle = b.color; ctx.fillRect(b.x, b.y, b.w, b.h);
-    ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 2; ctx.strokeRect(b.x, b.y, b.w, b.h);
-    ctx.fillStyle = 'rgba(255,255,255,0.55)';
-    const cols = Math.max(2, Math.floor(b.w / 34)), rows = Math.max(2, Math.floor(b.h / 30));
-    for (let cx = 0; cx < cols; cx++) for (let cy = 0; cy < rows; cy++) { if ((cx * 7 + cy * 13) % 3 !== 0) ctx.fillRect(b.x + 10 + cx * 30, b.y + 12 + cy * 26, 14, 12); }
-    ctx.fillStyle = '#1b1b22'; ctx.fillRect(b.x, b.y + b.h - 26, b.w, 26);
-    ctx.fillStyle = '#ffd166'; ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center';
-    ctx.fillText(b.name, b.x + b.w / 2, b.y + b.h - 8);
   }
-  // props
-  for (const p of world.props) {
-    if (p.x < x0 || p.x > x1 || p.y < y0 || p.y > y1) continue;
-    if (p.type === 'lamp') { ctx.fillStyle = '#333'; ctx.fillRect(p.x - 2, p.y - 12, 4, 14); ctx.fillStyle = timeOfDay > 0.72 || timeOfDay < 0.22 ? '#ffe97a' : '#cfd8dc'; ctx.beginPath(); ctx.arc(p.x, p.y - 15, 5, 0, 7); ctx.fill(); }
-    else if (p.type === 'palm') { ctx.strokeStyle = '#6d4c2f'; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x + 3, p.y - 22); ctx.stroke(); ctx.strokeStyle = '#2e9e4f'; ctx.lineWidth = 3; for (let k = 0; k < 5; k++) { const a = k * 1.25; ctx.beginPath(); ctx.moveTo(p.x + 3, p.y - 22); ctx.lineTo(p.x + 3 + Math.cos(a) * 18, p.y - 22 + Math.sin(a) * 10 - 6); ctx.stroke(); } }
-    else { ctx.fillStyle = '#a67c52'; ctx.fillRect(p.x - 10, p.y - 10, 20, 20); ctx.strokeStyle = '#6d4c2f'; ctx.strokeRect(p.x - 10, p.y - 10, 20, 20); }
+  return { buildings, props, pickups, parked, specials };
+}
+
+export function isRoad(x, y) {
+  if (y > BEACH_Y) return false;
+  for (const rx of ROAD_XS) if (Math.abs(x - rx) < ROAD_W / 2) return true;
+  for (const ry of ROAD_YS) if (Math.abs(y - ry) < ROAD_W / 2) return true;
+  return false;
+}
+export function nearestRoadPoint(x, y) {
+  let best = null, bd = 1e18;
+  for (const rx of ROAD_XS) { const d = Math.abs(x - rx); if (d < bd) { bd = d; best = { x: rx, y, vertical: true }; } }
+  for (const ry of ROAD_YS) { const d = Math.abs(y - ry); if (d < bd) { bd = d; best = { x, y: ry, vertical: false }; } }
+  return best;
+}
+export function collideBuildings(buildings, x, y, r) {
+  for (const b of buildings) {
+    if (b.kind === 'park') continue;
+    if (x + r > b.x - b.w / 2 && x - r < b.x + b.w / 2 && y + r > b.y - b.h / 2 && y - r < b.y + b.h / 2) return b;
   }
-  // pickups
-  for (const p of world.pickups) {
-    if (p.taken || p.x < x0 || p.x > x1 || p.y < y0 || p.y > y1) continue;
-    const bob = Math.sin(performance.now() / 300 + p.x) * 3;
-    ctx.fillStyle = p.type === 'health' ? '#e63946' : p.type === 'cash' ? '#2ecc71' : p.type === 'smg' ? '#9d4edd' : '#f4a261';
-    ctx.beginPath(); ctx.arc(p.x, p.y + bob, 11, 0, 7); ctx.fill();
-    ctx.fillStyle = '#fff'; ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'center';
-    ctx.fillText(p.type === 'health' ? '+' : p.type === 'cash' ? '$' : p.type === 'smg' ? 'S' : 'A', p.x, p.y + bob + 4);
-  }
-  ctx.restore();
+  return null;
 }

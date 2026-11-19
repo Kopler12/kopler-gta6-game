@@ -1,62 +1,87 @@
 # SAN VERANO: Neon Coast
 
-An original open-world crime game in a sun-soaked coastal city. Everything — city, characters, vehicles, story, art and sound — was created for this game. No third-party assets, no network requests at runtime.
+An original top-down 2D open-world crime game that runs entirely in the browser.
+No assets, no network requests at runtime — every building, car and palm tree is
+drawn with Canvas 2D and every sound is synthesized live with WebAudio.
 
-## Story pitch
+## The story
 
-You arrive in San Verano with $150, a borrowed pistol, and a reputation you have not earned yet. Rosa Delgado gives you your first wheel work. Diego Fuentes needs a crate moved quietly. Vera Kaine wants her stolen ride back. Marco Solano is holding Parque Central against a rival crew. Six story jobs chain from a friendly hospital run to a five-star escape to the safehouse — and between jobs, the whole city is yours: steal cars, run taxi fares, chase pickups, and try to keep the SVPD off your tail.
+You are **Nico Alvarez**, a newcomer driver who washes up in **San Verano**, a
+sun-baked neon coast city of hotels, clubs, workshops and a working harbour.
+**Rosa** (owner of Casa Rosa) gives you a roof and your first wheel. **Diego**
+the mechanic, **Vera** the harbour smuggler and **Marco** the club owner pull
+you deeper: a harbour pickup, a stolen-car chase, a plaza shootout, a race
+against the last ferry, and a five-star finale run across town with a case full
+of cash. Finish the story, then keep earning with taxi fares in free roam.
 
 ## Features
 
-- Dense explorable city (3600×2800 world): road grid with intersections and crosswalks, sidewalks and blocks, 90+ named buildings with signs (cafes, hotels, a bank, a cinema, shops), a beach and waterfront, Parque Central, props (lamps, palms, crates), parked cars, plus a Police Station, Hospital and Safehouse
-- On foot: walk and sprint with building and water collision
-- Driving: enter/exit any car with E (stealing raises your wanted level), arcade physics with acceleration, braking, reverse, steering and a handbrake, skid marks, damage states with smoke at low health, and headlights at night
-- Traffic AI that drives the road network, turns at intersections and brakes for obstacles; pedestrians stroll the city and flee danger and gunfire
-- Wanted system, 0–5 stars for stealing, assault, shooting, collisions and shooting police; stars decay while you stay out of sight. Police cars pursue on foot and by car, foot officers chase and shoot at 2+ stars. BUSTED / WASTED sends you back to the police station / hospital with a cash fee
-- Combat: melee punch, a pistol with limited ammo and mouse aim, muzzle flash particles, hit reactions and NPC deaths, plus a findable SMG (key 2), and health / ammo / cash pickups scattered across the city
-- Six-mission story chain with named givers (Rosa, Diego, Vera, Marco) and dialogue boxes: intro drive, pickup/delivery, a car chase, a shootout, a timed run, and a 5-star finale — with world and minimap markers, HUD objectives, cash rewards, fail/retry, and autosave after every mission
-- Repeatable taxi side activity (press T) for extra cash
-- Full HUD: health bar, car health, cash, wanted stars, weapon and ammo, objective line, day clock with a day–dusk–night tint cycle, and a live minimap (streets, player arrow, mission marker, police blips)
-- Animated start screen with New Game / Continue, pause menu, wasted/busted screens, mission dialogue
-- Polish: day-cycle tinting, skid marks, spark/smoke/muzzle particles, screen shake, and a fully synthesized WebAudio soundtrack — engine, sirens, gunshots and a bass music loop (M to mute)
+- Dense explorable city (3200×2400 world): road grid with intersections,
+  crosswalks and sidewalks, ~90 named buildings with signs, a beach and sea
+  edge, two parks, lamps, palms, crates, parked cars, plus a police station,
+  hospital, safehouse and ammo shop — with a smooth follow camera.
+- On foot: WASD/arrows movement, Shift sprint, building and water collision.
+- Driving: enter/exit any car with E (stealing raises your wanted level),
+  arcade physics, Space handbrake, skid marks, car damage with smoke and fire
+  risk, headlights and street-lamp glow at night.
+- Living traffic: AI cars follow the road network, keep lanes, turn at
+  intersections, stop for crossings and each other; pedestrians stroll the
+  sidewalks and flee from speed, crashes and gunfire.
+- Wanted system: 0–5 stars for stealing, assault, shooting, hit-and-runs and
+  attacking police; stars decay while you stay out of sight. Police cars spawn
+  and pursue on foot and by car; foot officers chase and shoot at 2+ stars.
+  Get **BUSTED** or **WASTED** and you respawn at the police station or
+  hospital minus a cash penalty.
+- Combat: F/click punch, mouse-aimed pistol, a findable SMG (key 2, at the
+  Ammo & Gear shop), muzzle flashes, sparks, hit reactions, deaths, and
+  health/ammo/cash pickups scattered around the city.
+- Six story missions with named characters and dialogue boxes, world and
+  minimap markers, on-HUD objectives, cash rewards, fail/retry and autosave —
+  plus repeatable taxi fares for money in free roam.
+- Full HUD: health (and car health), cash, wanted stars, weapon and ammo,
+  objective text, a day clock with day–dusk–night tinting, and a live minimap
+  with streets, police blips, mission markers and your heading arrow.
+- Flow: animated start screen (New Game / Continue), pause menu, wasted and
+  busted screens, mission dialogue; progress persists in `localStorage`.
+- Polish: day cycle, particles, screen shake, synthesized engine, sirens,
+  gunshots and a bass music loop (M mutes), 60 fps delta-time loop.
 
 ## Controls
 
 | Input | Action |
 | --- | --- |
-| WASD / arrows | Walk or drive |
-| Shift | Sprint on foot |
-| Mouse | Aim |
-| Click | Shoot |
-| F | Punch |
+| WASD / Arrows | Walk or drive |
+| Shift | Sprint |
 | E | Enter / exit car |
-| Space | Handbrake |
+| Mouse + Click | Aim and shoot (on foot) |
+| F | Punch |
 | 1 / 2 | Pistol / SMG |
-| T | Taxi fare start / cancel |
+| Space | Handbrake |
 | Esc / P | Pause |
 | M | Mute |
+| Enter / Click | Advance dialogue |
 
 ## How to run
 
-Requires Node 22 (standard library only, nothing to install):
-
-```
-node serve.ts
-```
-
-Then open http://localhost:8080 in desktop Chrome. To build the submission dossier:
-
-```
-mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
+```sh
+node serve.ts            # then open http://localhost:8080
+# or: node serve.ts --port 9000
 ```
 
-Deterministic screenshot scenes are available via URL parameters, e.g. `?shot=cover&seed=1`, `?shot=drive&seed=1`, `?shot=chase&seed=1`, `?shot=mission&seed=1`.
+Any static file server pointed at `game/` works too. Desktop Chrome with
+keyboard and mouse is the target.
+
+Deterministic screenshot scenes are available via URL parameters, e.g.
+`?shot=cover|drive|chase|mission&seed=1`.
 
 ## Tech notes
 
-- Plain static files under `game/`: one HTML page and ES modules (`src/world.js` city generation and rendering, `src/audio.js` WebAudio synthesis, `src/missions.js` story data, `src/main.js` game loop, AI, combat and HUD)
-- All art is drawn with the 2D canvas API; all sound is synthesized with WebAudio oscillators and filtered noise — zero external assets and zero runtime network requests
-- Fixed-cap delta-time loop targeting 60 fps; progress (cash, story progress, position, ammo) is saved to `localStorage`
+- Plain static files under `game/`: `index.html` plus ES modules in
+  `game/src/` (`main.js` engine/HUD/render, `world.js` city generation,
+  `missions.js` story data, `audio.js` WebAudio synth). No dependencies,
+  no build step, no external assets, no runtime network calls.
+- The city is generated deterministically from a seed, so screenshot scenes
+  are reproducible.
 
 ## License
 

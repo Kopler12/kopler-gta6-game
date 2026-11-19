@@ -1,333 +1,870 @@
-// SAN VERANO: Neon Coast — main game loop, entities, AI, combat, HUD.
-import { WORLD_W, WORLD_H, ROAD, BLOCK, buildWorld, drawWorld, isRoad, isWater, collideRect, mulberry } from './world.js';
-import { Sound } from './audio.js';
-import { MISSIONS, CHARACTERS, TAXI_SPOTS } from './missions.js';
-const cv = document.getElementById('game'), ctx = cv.getContext('2d');
-const mm = document.getElementById('minimap'), mmx = mm.getContext('2d');
-const W = () => cv.width, H = () => cv.height;
-function resize() { cv.width = innerWidth; cv.height = innerHeight; } addEventListener('resize', resize); resize();
+// SAN VERANO: Neon Coast — original top-down open-world crime game.
+// Canvas 2D, ES modules, no network, all art drawn, all sound synthesized.
+import { WORLD_W, WORLD_H, ROAD_XS, ROAD_YS, ROAD_W, BEACH_Y, buildWorld, isRoad, collideBuildings, mulberry } from './world.js';
+import { AudioEngine } from './audio.js';
+import { MISSIONS, CHARACTERS, missionGiverPos } from './missions.js';
+
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+let W = 1280, H = 720;
+function resize() { W = canvas.width = window.innerWidth; H = canvas.height = window.innerHeight; }
+window.addEventListener('resize', resize); resize();
+
 const params = new URLSearchParams(location.search);
-const shot = params.get('shot'), seed = parseInt(params.get('seed') || '1');
-const rnd = mulberry(seed * 331 + 7);
-const snd = new Sound();
-const keys = {}; let mouse = { x: 0, y: 0, down: false };
-addEventListener('keydown', e => { keys[e.key.toLowerCase()] = true; if (['arrowup','arrowdown','arrowleft','arrowright',' '].includes(e.key.toLowerCase())) e.preventDefault(); onKey(e.key); });
-addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
-cv.addEventListener('mousemove', e => { mouse.x = e.clientX; mouse.y = e.clientY; });
-cv.addEventListener('mousedown', () => { mouse.down = true; snd.ensure(); });
-addEventListener('mouseup', () => mouse.down = false);
+const shotMode = params.get('shot');
+const seed = parseInt(params.get('seed') || '1', 10) || 1;
+const rnd = mulberry(seed * 7919 + 13);
+const audio = new AudioEngine();
+
 const world = buildWorld(seed);
-const CAR_COLORS = ['#e63946','#457b9d','#f1fa8c','#2a9d8f','#e9c46a','#ffffff','#9d4edd','#ff7b00','#4cc9f0','#ef476f'];
-function mkCar(x, y, angle, color, opts = {}) { return { x, y, angle, speed: 0, color, health: 100, driver: opts.driver || null, police: !!opts.police, traffic: !!opts.traffic, stopped: 0, aiT: Math.random() * 2, skid: 0, dead: false }; }
-let cars = [], peds = [], bullets = [], particles = [], skids = [], cops = [];
-let player, G;
-function newPlayer(x, y) { return { x, y, angle: -Math.PI / 2, health: 100, cash: G ? G.cash : 150, weapon: 'pistol', ammo: { pistol: 48, smg: 0 }, hasSmg: false, car: null, punchCd: 0, fireCd: 0, dead: false }; }
-function freshState() { return { cash: 150, missionIdx: 0, stepIdx: 0, missionActive: false, taxi: null, time: 0.32, day: 1, wanted: 0, hideTimer: 0, state: 'title', dialogue: null, dlgIdx: 0, objective: 'Explore San Verano', timer: 0, shake: 0, msg: '', msgT: 0, chaseCar: null, shootLeft: 0, paused: false, over: null, taxiCount: 0 }; }
-function spawnTraffic() { cars = []; world.parked.forEach(p => cars.push(mkCar(p.x, p.y, p.angle, p.color, {}))); for (let i = 0; i < 16; i++) { let x, y, t = 0; do { x = 80 + rnd() * 2900; y = 80 + rnd() * 2600; t++; } while (t < 30 && !isRoad(x, y)); const c = mkCar(x, y, Math.floor(rnd() * 4) * Math.PI / 2, CAR_COLORS[i % 10], { traffic: true, driver: 'npc' }); c.speed = 60; cars.push(c); } }
-function spawnPeds(n, cx, cy) { for (let i = 0; i < n; i++) { let x = cx + (rnd() - 0.5) * 900, y = cy + (rnd() - 0.5) * 900; x = Math.max(30, Math.min(2980, x)); y = Math.max(30, Math.min(2750, y)); if (collideRect(x, y, 10, world.buildings) || isWater(x, y)) continue; peds.push({ x, y, angle: rnd() * 6.28, health: 30, speed: 26 + rnd() * 22, color: CAR_COLORS[Math.floor(rnd() * 10)], flee: 0, cop: false, hostile: false, fireCd: rnd() * 2, walkT: rnd() * 4, dead: false }); } }
-function save() { try { localStorage.setItem('sanverano-save', JSON.stringify({ cash: player.cash, missionIdx: G.missionIdx, x: player.x, y: player.y, ammo: player.ammo, hasSmg: player.hasSmg })); } catch (e) {} }
-function loadSave() { try { return JSON.parse(localStorage.getItem('sanverano-save')); } catch (e) { return null; } }
-function crime(amount) { G.wanted = Math.min(5, G.wanted + amount); G.hideTimer = 0; }
-function startGame(fromSave) {
-  G = freshState(); spawnTraffic(); peds = []; bullets = []; particles = []; skids = []; cops = [];
-  player = newPlayer(world.safehouse.x, world.safehouse.y + 90);
-  if (fromSave) { const s = loadSave(); if (s) { player.cash = s.cash; G.cash = s.cash; G.missionIdx = s.missionIdx || 0; player.x = s.x; player.y = s.y; player.ammo = s.ammo || player.ammo; player.hasSmg = !!s.hasSmg; } }
-  spawnPeds(46, player.x, player.y); G.state = 'play';
-  if (G.missionIdx < MISSIONS.length) offerMission(); else G.objective = 'Free roam — do taxi fares (T) for cash';
-  showMsg('Welcome to San Verano');
+const SAVE_KEY = 'sanverano_save_v1';
+
+const keys = {};
+let mouseX = 0, mouseY = 0, mouseDown = false;
+window.addEventListener('keydown', e => {
+  keys[e.key.toLowerCase()] = true;
+  if (['arrowup','arrowdown','arrowleft','arrowright',' '].includes(e.key.toLowerCase())) e.preventDefault();
+  audio.ensure();
+  if (e.key.toLowerCase() === 'm') { audio.setMuted(!audio.muted); toast(audio.muted ? 'Sound OFF (M)' : 'Sound ON (M)'); }
+  if (e.key === 'Escape' || e.key.toLowerCase() === 'p') { if (state.screen === 'play') state.screen = 'pause'; else if (state.screen === 'pause') state.screen = 'play'; }
+  if (e.key.toLowerCase() === 'e') tryEnterExit();
+  if (e.key === '1') setWeapon('pistol');
+  if (e.key === '2') setWeapon('smg');
+  if (e.key.toLowerCase() === 'f') doPunch();
+  if (e.key.toLowerCase() === 'enter' && state.dialogue) advanceDialogue();
+});
+window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+canvas.addEventListener('mousemove', e => { mouseX = e.clientX; mouseY = e.clientY; });
+canvas.addEventListener('mousedown', e => { mouseDown = true; audio.ensure(); if (state.dialogue) advanceDialogue(); else if (state.screen === 'play') playerShoot(); });
+window.addEventListener('mouseup', () => { mouseDown = false; });
+canvas.addEventListener('click', e => { handleMenuClick(e.clientX, e.clientY); });
+
+function loadSave() {
+  try { const s = JSON.parse(localStorage.getItem(SAVE_KEY)); if (s && typeof s.cash === 'number') return s; } catch (e) {}
+  return null;
 }
-function offerMission() { const m = MISSIONS[G.missionIdx]; G.dialogue = m.intro; G.dlgIdx = 0; G.state = 'dialogue'; G.objective = m.title; }
-function beginMission() { const m = MISSIONS[G.missionIdx]; G.missionActive = true; G.stepIdx = 0; setupStep(); G.state = 'play'; }
-function setupStep() {
-  const m = MISSIONS[G.missionIdx], s = m.steps[G.stepIdx]; if (!s) return;
-  G.objective = s.label; if (s.time) G.timer = s.time; else G.timer = 0;
-  if (s.type === 'chase') { const c = mkCar(s.x, s.y, 0, '#ffd166', { driver: 'thief', traffic: true }); c.speed = 120; cars.push(c); G.chaseCar = c; }
-  if (s.type === 'shootout') { G.shootLeft = s.count; for (let i = 0; i < s.count; i++) peds.push({ x: s.x + (rnd() - 0.5) * 260, y: s.y + (rnd() - 0.5) * 260, angle: rnd() * 6.28, health: 40, speed: 30, color: '#111', flee: 0, cop: false, hostile: true, fireCd: 1 + rnd(), walkT: 0, dead: false }); }
-  if (s.finale) crime(5);
+function saveGame() {
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify({ cash: state.cash, mission: state.missionIdx, x: player.x, y: player.y, hp: player.hp })); } catch (e) {}
+}
+
+const CAR_COLORS = ['#e63946','#457b9d','#f4d35e','#2a9d8f','#9d4edd','#ffffff','#fb8500','#06d6a0','#ef476f','#4361ee'];
+function makeCar(x, y, angle, color, kind) {
+  return { x, y, angle: angle || 0, speed: 0, color: color || CAR_COLORS[(rnd() * CAR_COLORS.length) | 0], kind: kind || 'civil', hp: 100, w: 44, h: 22, driver: true, aiTimer: rnd() * 2, targetSpeed: 120 + rnd() * 80, smokeT: 0, dead: false, isTarget: false, stopped: 0 };
+}
+function makePed(x, y, kind) {
+  const shirts = ['#ffd166','#06d6a0','#ef476f','#4cc9f0','#f72585','#ffffff','#ff9f1c','#2ec4b6'];
+  return { x, y, angle: rnd() * Math.PI * 2, speed: 0, kind: kind || 'civil', hp: kind === 'cop' ? 60 : (kind === 'thug' ? 50 : 30), color: shirts[(rnd() * shirts.length) | 0], state: 'walk', timer: rnd() * 3, shootCd: 0, dead: false, fleeT: 0, punchCd: 0 };
+}
+
+const player = { x: 900, y: 1470, angle: -Math.PI / 2, hp: 100, maxHp: 100, car: null, speed: 0, weapon: 'pistol', ammo: { pistol: 60, smg: 0 }, hasSmg: false, shootCd: 0, punchCd: 0, radius: 11 };
+const state = {
+  screen: 'title', cash: 100, wanted: 0, wantedHeat: 0, hideTimer: 0, time: 17.2, day: 1,
+  missionIdx: 0, missionStep: -1, missionActive: false, dialogue: null, dialogueCb: null,
+  objective: 'Talk to Rosa at Casa Rosa (follow the yellow marker)', timer: 0, timerOn: false,
+  shake: 0, bustedT: 0, taxi: null, taxiCd: 5, kills: 0, gameWon: false, msg: '', msgT: 0,
+  chaseCar: null, thugsLeft: 0, fadeMsg: '',
+};
+let cars = [], peds = [], bullets = [], particles = [], skids = [], cops = [];
+let camX = player.x, camY = player.y, elapsed = 0;
+
+function toast(t) { state.msg = t; state.msgT = 3.2; }
+function addWanted(n) {
+  state.wantedHeat += n;
+  const ns = Math.min(5, Math.floor(state.wantedHeat / 3));
+  if (ns > state.wanted) { state.wanted = ns; }
+  state.hideTimer = 0;
+}
+function setWeapon(w) { if (w === 'smg' && !player.hasSmg) { toast('Find the SMG at the Ammo shop first'); return; } player.weapon = w; }
+
+function spawnTraffic() {
+  cars = [];
+  for (const p of world.parked) { const c = makeCar(p.x, p.y, p.angle, p.color, 'parked'); c.driver = false; cars.push(c); }
+  for (let i = 0; i < 16; i++) {
+    const vertical = rnd() > 0.5;
+    let x, y, a;
+    if (vertical) { const rx = ROAD_XS[(rnd() * ROAD_XS.length) | 0]; const dir = rnd() > 0.5 ? 1 : -1; x = rx + (dir > 0 ? 26 : -26); y = 200 + rnd() * 1800; a = dir > 0 ? Math.PI / 2 : -Math.PI / 2; }
+    else { const ry = ROAD_YS[(rnd() * ROAD_YS.length) | 0]; const dir = rnd() > 0.5 ? 1 : -1; y = ry + (dir > 0 ? -26 : 26); x = 200 + rnd() * 2800; a = dir > 0 ? 0 : Math.PI; }
+    const c = makeCar(x, y, a, null, 'traffic'); c.speed = 100; cars.push(c);
+  }
+  // Rosa's coupe for mission 1
+  const coupe = makeCar(950, 1550, 0, '#06d6a0', 'civil'); coupe.isCoupe = true; cars.push(coupe);
+}
+function spawnPeds() {
+  peds = [];
+  for (let i = 0; i < 42; i++) {
+    let x = 150 + rnd() * (WORLD_W - 300), y = 150 + rnd() * 1800;
+    if (collideBuildings(world.buildings, x, y, 12)) { i--; continue; }
+    peds.push(makePed(x, y, 'civil'));
+  }
+}
+function spawnCopCar() {
+  const a = rnd() * Math.PI * 2, d = 620;
+  const x = Math.max(60, Math.min(WORLD_W - 60, player.x + Math.cos(a) * d));
+  const y = Math.max(60, Math.min(BEACH_Y - 40, player.y + Math.sin(a) * d));
+  const c = makeCar(x, y, 0, '#dfe6ee', 'cop'); c.isCop = true; cops.push(c); cars.push(c);
+}
+function spawnFootCop() {
+  const a = rnd() * Math.PI * 2;
+  const p = makePed(player.x + Math.cos(a) * 340, player.y + Math.sin(a) * 340, 'cop');
+  p.color = '#274472'; peds.push(p);
+}
+
+// ---------- dialogue / missions ----------
+function showDialogue(lines, cb) { state.dialogue = { lines, idx: 0 }; state.dialogueCb = cb || null; }
+function advanceDialogue() {
+  if (!state.dialogue) return;
+  state.dialogue.idx++;
+  audio.blip(700, 0.05, 'square', 0.05);
+  if (state.dialogue.idx >= state.dialogue.lines.length) { const cb = state.dialogueCb; state.dialogue = null; state.dialogueCb = null; if (cb) cb(); }
+}
+function currentStep() {
+  if (state.missionIdx >= MISSIONS.length || state.missionStep < 0) return null;
+  return MISSIONS[state.missionIdx].steps[state.missionStep];
+}
+function startMission(idx) {
+  const m = MISSIONS[idx]; if (!m) return;
+  state.missionActive = true; state.missionStep = 0;
+  showDialogue(m.intro, () => { applyStep(); toast('Mission: ' + m.title); });
+  applyStepObjective();
+}
+function applyStepObjective() {
+  const s = currentStep(); if (!s) { state.objective = state.missionIdx >= MISSIONS.length ? 'Free roam — taxi fares and deliveries pay cash' : 'Talk to the marked contact'; return; }
+  state.objective = s.text;
+  if (s.timer) { state.timer = s.timer; state.timerOn = true; } else state.timerOn = false;
+  if (s.wanted) { state.wantedHeat = Math.max(state.wantedHeat, s.wanted * 3 + 1); state.wanted = Math.max(state.wanted, s.wanted); }
+}
+function applyStep() {
+  const s = currentStep(); if (!s) return;
+  if (s.type === 'chase' && !state.chaseCar) {
+    const c = makeCar(s.x, s.y, Math.PI, '#ffbe0b', 'traffic'); c.isTarget = true; c.hp = 55; c.speed = 150; cars.push(c); state.chaseCar = c;
+  }
+  if (s.type === 'shootout') {
+    state.thugsLeft = s.count;
+    for (let i = 0; i < s.count; i++) { const p = makePed(s.x + (rnd() - 0.5) * 220, s.y + (rnd() - 0.5) * 220, 'thug'); p.color = '#7f1d2d'; peds.push(p); }
+  }
+  applyStepObjective();
 }
 function completeStep() {
-  const m = MISSIONS[G.missionIdx]; snd.cash(); G.stepIdx++;
-  if (G.stepIdx >= m.steps.length) { player.cash += m.reward; G.cash = player.cash; showMsg('Mission complete! +$' + m.reward); G.missionActive = false; G.missionIdx++; save(); if (G.missionIdx < MISSIONS.length) setTimeout(() => { if (G.state === 'play') offerMission(); }, 2500); else G.objective = 'Story complete! Free roam — taxi fares (T)'; }
-  else setupStep();
+  const m = MISSIONS[state.missionIdx];
+  state.missionStep++;
+  if (state.missionStep >= m.steps.length) {
+    state.cash += m.reward; audio.mission(); state.missionActive = false; state.missionStep = -1;
+    showDialogue(m.outro, () => {});
+    toast('Mission complete! +$' + m.reward);
+    state.missionIdx++;
+    if (state.missionIdx >= MISSIONS.length) { state.gameWon = true; state.objective = 'Story complete! Free roam — taxi fares pay cash'; }
+    else state.objective = 'Talk to ' + MISSIONS[state.missionIdx].giver + ' (yellow marker)';
+    saveGame();
+  } else { applyStep(); toast('Objective updated'); }
 }
-function failMission(reason) { showMsg('Mission failed: ' + reason + ' — retrying'); G.missionActive = false; G.wanted = Math.max(0, G.wanted - 1); setTimeout(() => { if (G.missionIdx < MISSIONS.length) { G.missionActive = true; G.stepIdx = 0; setupStep(); } }, 1500); }
-function showMsg(t) { G.msg = t; G.msgT = 3.5; }
-function burst(x, y, color, n, spd = 90) { for (let i = 0; i < n; i++) { const a = Math.random() * 6.28, s = Math.random() * spd; particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.4 + Math.random() * 0.4, color, r: 2 + Math.random() * 3 }); } }
-function onKey(k) {
-  snd.ensure();
-  if (k === 'm' || k === 'M') snd.muted = !snd.muted;
-  if (!G) return;
-  if (G.state === 'dialogue' && (k === ' ' || k === 'Enter')) { G.dlgIdx++; if (G.dlgIdx >= G.dialogue.length) { G.dialogue = null; beginMission(); } }
-  if ((k === 'Escape' || k.toLowerCase() === 'p') && G.state === 'play') G.paused = !G.paused;
-  if (k.toLowerCase() === 'e' && G.state === 'play' && !G.paused) tryEnterExit();
-  if (k === '1') player.weapon = 'pistol';
-  if (k === '2' && player.hasSmg) player.weapon = 'smg';
-  if (k.toLowerCase() === 't' && G.state === 'play') startTaxi();
-  if (k.toLowerCase() === 'f' && G.state === 'play') punch();
+function failMission(reason) {
+  audio.fail(); state.missionActive = false; state.missionStep = -1; state.timerOn = false;
+  if (state.chaseCar) { state.chaseCar.isTarget = false; state.chaseCar = null; }
+  toast('Mission failed: ' + reason + ' — talk to the contact to retry');
+  state.objective = 'Mission failed — return to the contact to retry';
 }
-function startTaxi() { if (G.taxi) { G.taxi = null; G.objective = 'Taxi cancelled'; return; } const s = TAXI_SPOTS[Math.floor(Math.random() * TAXI_SPOTS.length)]; G.taxi = { x: s.x, y: s.y, phase: 'pickup' }; G.objective = 'Taxi: pick up fare (enter any car)'; showMsg('Taxi fare started'); }
+function checkMission() {
+  const s = currentStep(); if (!s || state.dialogue) return;
+  const px = player.car ? player.car.x : player.x, py = player.car ? player.car.y : player.y;
+  const d = Math.hypot(px - s.x, py - s.y);
+  if (s.type === 'enter_car') { if (player.car && player.car.isCoupe) completeStep(); return; }
+  if (s.type === 'goto') {
+    if (s.needCar && !player.car) return;
+    if (d < 70) completeStep(); return;
+  }
+  if (s.type === 'chase') {
+    if (state.chaseCar) {
+      if (state.chaseCar.dead || state.chaseCar.hp <= 12) { state.chaseCar.speed = 0; toast('Stolen car stopped! Get in it'); if (player.car === state.chaseCar) { state.chaseCar = null; completeStep(); } }
+    }
+    return;
+  }
+  if (s.type === 'shootout') { if (state.thugsLeft <= 0) completeStep(); return; }
+  if (s.type === 'escape') { if (state.wanted === 0) completeStep(); return; }
+}
+function tryTalk() {
+  if (state.dialogue || state.missionActive) return false;
+  const g = missionGiverPos(state.missionIdx); if (!g) return false;
+  if (Math.hypot(player.x - g.x, player.y - g.y) < 60 && !player.car) { startMission(state.missionIdx); return true; }
+  return false;
+}
+
+// ---------- combat / interaction ----------
+function burst(x, y, color, n, spd) {
+  for (let i = 0; i < n; i++) { const a = rnd() * Math.PI * 2, s = (spd || 120) * (0.3 + rnd()); particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.4 + rnd() * 0.4, max: 0.8, color, size: 2 + rnd() * 3 }); }
+}
+function playerShoot() {
+  if (player.car || player.shootCd > 0 || state.dialogue) return;
+  const w = player.weapon;
+  if (player.ammo[w] <= 0) { audio.blip(200, 0.06, 'square', 0.08); toast('No ammo — find ammo pickups'); return; }
+  player.ammo[w]--; player.shootCd = w === 'smg' ? 0.09 : 0.28;
+  const wx = camX + mouseX, wy = camY + mouseY;
+  const a = Math.atan2(wy - player.y, wx - player.x) + (rnd() - 0.5) * (w === 'smg' ? 0.09 : 0.03);
+  player.angle = a;
+  bullets.push({ x: player.x + Math.cos(a) * 16, y: player.y + Math.sin(a) * 16, vx: Math.cos(a) * 900, vy: Math.sin(a) * 900, life: 0.6, from: 'player', dmg: w === 'smg' ? 16 : 26 });
+  burst(player.x + Math.cos(a) * 20, player.y + Math.sin(a) * 20, '#ffd166', 3, 60);
+  audio.shoot(w === 'smg');
+  addWanted(1.2);
+  for (const p of peds) if (!p.dead && Math.hypot(p.x - player.x, p.y - player.y) < 260) { p.state = 'flee'; p.fleeT = 3; }
+}
+function doPunch() {
+  if (player.car || player.punchCd > 0 || state.screen !== 'play') return;
+  player.punchCd = 0.35; audio.punch();
+  burst(player.x + Math.cos(player.angle) * 18, player.y + Math.sin(player.angle) * 18, '#ffffff', 3, 50);
+  for (const p of peds) {
+    if (p.dead) continue;
+    if (Math.hypot(p.x - player.x, p.y - player.y) < 34) { hurtPed(p, 18, true); }
+  }
+  for (const c of cars) { if (c !== player.car && Math.hypot(c.x - player.x, c.y - player.y) < 42) { damageCar(c, 6); } }
+}
+function hurtPed(p, dmg, melee) {
+  p.hp -= dmg; p.state = 'flee'; p.fleeT = 3; burst(p.x, p.y, '#e63946', 5, 90);
+  if (p.kind === 'cop') addWanted(2.5); else if (p.kind === 'civil') addWanted(melee ? 1 : 2);
+  if (p.hp <= 0 && !p.dead) {
+    p.dead = true; state.kills++;
+    if (p.kind === 'thug') { state.thugsLeft = Math.max(0, state.thugsLeft - 1); state.cash += 40; toast('Thug down +$40'); }
+    if (p.kind === 'cop') addWanted(3);
+    burst(p.x, p.y, '#e63946', 14, 140);
+  }
+}
+function damageCar(c, dmg) {
+  c.hp -= dmg;
+  if (c.hp <= 0 && !c.dead) { c.dead = true; c.speed = 0; burst(c.x, c.y, '#ff8500', 22, 200); burst(c.x, c.y, '#333333', 12, 80); audio.crash(); state.shake = Math.max(state.shake, 8); if (c.isCop) addWanted(3); }
+}
 function tryEnterExit() {
-  if (player.car) { const c = player.car; player.x = c.x + Math.cos(c.angle + Math.PI / 2) * 26; player.y = c.y + Math.sin(c.angle + Math.PI / 2) * 26; c.driver = null; if (c.speed !== 0) c.speed = 0; player.car = null; return; }
+  if (state.screen !== 'play' || state.dialogue) return;
+  if (player.car) {
+    const c = player.car; player.x = c.x + Math.cos(c.angle + Math.PI / 2) * 30; player.y = c.y + Math.sin(c.angle + Math.PI / 2) * 30;
+    player.car = null; audio.setEngine(false, 0); return;
+  }
   let best = null, bd = 52;
   for (const c of cars) { if (c.dead) continue; const d = Math.hypot(c.x - player.x, c.y - player.y); if (d < bd) { bd = d; best = c; } }
-  if (best) { if (best.driver === 'npc' || best.traffic) { crime(1); showMsg('Vehicle stolen!'); burst(best.x, best.y, '#ffd166', 6); } best.driver = 'player'; best.traffic = false; player.car = best; snd.ensure(); }
-}
-function punch() { if (player.car || player.punchCd > 0) return; player.punchCd = 0.35; snd.punch(); for (const p of peds) { if (!p.dead && Math.hypot(p.x - player.x, p.y - player.y) < 34) { hurtPed(p, 15, player.angle); crime(0.5); } } }
-function hurtPed(p, dmg, ang) { p.health -= dmg; p.flee = 4; burst(p.x, p.y, '#e63946', 5, 60); snd.hit(); if (p.health <= 0 && !p.dead) { p.dead = true; player.cash += 5 + Math.floor(Math.random() * 20); if (p.cop) crime(1.5); else crime(0.7); if (p.hostile && G.missionActive) { G.shootLeft--; if (G.shootLeft <= 0) completeStep(); } } }
-function shoot() {
-  if (player.car || player.fireCd > 0) return; const w = player.weapon;
-  if (player.ammo[w] <= 0) { showMsg('No ammo — find ammo pickups'); player.fireCd = 0.3; return; }
-  player.ammo[w]--; player.fireCd = w === 'smg' ? 0.11 : 0.28;
-  const a = Math.atan2(mouse.y - H() / 2, mouse.x - W() / 2);
-  bullets.push({ x: player.x + Math.cos(a) * 16, y: player.y + Math.sin(a) * 16, vx: Math.cos(a) * 720, vy: Math.sin(a) * 720, life: 0.55, from: 'player' });
-  burst(player.x + Math.cos(a) * 18, player.y + Math.sin(a) * 18, '#ffd166', 3, 50); G.shake = Math.max(G.shake, 2); snd.shoot(w === 'smg');
-  for (const p of peds) if (Math.hypot(p.x - player.x, p.y - player.y) < 260) p.flee = Math.max(p.flee, 2);
-  if (G.wanted > 0 || cops.length) crime(0.15);
-}
-function respawn(kind) {
-  const fee = Math.min(player.cash, 100 + G.missionIdx * 25); player.cash -= fee;
-  player.health = 100; G.wanted = 0; cops.forEach(c => { c.dead = true; }); cops = [];
-  if (player.car) { player.car.driver = null; player.car = null; }
-  const at = kind === 'busted' ? world.policeStation : world.hospital;
-  player.x = at.x; player.y = at.y + 120; G.state = 'play'; G.over = null;
-  if (G.missionActive) failMission(kind); showMsg((kind === 'busted' ? 'BUSTED! ' : 'WASTED! ') + 'Fee -$' + fee); save();
-}
-function update(dt) {
-  if (G.state !== 'play' || G.paused) return;
-  G.time += dt / 240; if (G.time >= 1) { G.time -= 1; G.day++; }
-  if (G.msgT > 0) G.msgT -= dt;
-  player.punchCd = Math.max(0, player.punchCd - dt); player.fireCd = Math.max(0, player.fireCd - dt);
-  if (mouse.down) shoot();
-  const px = player.car ? player.car.x : player.x, py = player.car ? player.car.y : player.y;
-  // wanted decay
-  const seen = cops.some(c => Math.hypot(c.x - px, c.y - py) < 420);
-  if (!seen && G.wanted > 0) { G.hideTimer += dt; if (G.hideTimer > 9) { G.wanted = Math.max(0, G.wanted - 0.5); G.hideTimer = 4; } } else G.hideTimer = 0;
-  // player movement
-  if (player.car) drivePlayer(dt); else walkPlayer(dt);
-  updateCars(dt); updatePeds(dt); updateBullets(dt); updatePolice(dt);
-  particles = particles.filter(p => (p.life -= dt) > 0); particles.forEach(p => { p.x += p.vx * dt; p.y += p.vy * dt; });
-  skids = skids.filter(s => (s.life -= dt) > 0);
-  // pickups
-  for (const p of world.pickups) { if (p.taken) { p.respawn -= dt; if (p.respawn <= 0) p.taken = false; continue; } if (Math.hypot(p.x - px, p.y - py) < 30) { p.taken = true; p.respawn = 45; snd.pickup(); if (p.type === 'health') player.health = Math.min(100, player.health + 40); if (p.type === 'ammo') { player.ammo.pistol += 24; if (player.hasSmg) player.ammo.smg += 40; } if (p.type === 'cash') { player.cash += 50; snd.cash(); } if (p.type === 'smg') { player.hasSmg = true; player.ammo.smg += 60; player.weapon = 'smg'; showMsg('SMG acquired! Press 2'); } } }
-  // mission step check
-  if (G.missionActive) { const s = MISSIONS[G.missionIdx].steps[G.stepIdx]; if (s) {
-    if (s.type === 'timerun') { G.timer -= dt; if (G.timer <= 0) failMission('out of time'); }
-    if ((s.type === 'goto' || s.type === 'deliver' || s.type === 'pickup' || s.type === 'timerun') && Math.hypot(s.x - px, s.y - py) < 55) completeStep();
-    if (s.type === 'chase' && G.chaseCar && (G.chaseCar.dead || Math.abs(G.chaseCar.speed) < 4 && Math.hypot(G.chaseCar.x - px, G.chaseCar.y - py) < 90)) { G.chaseCar = null; completeStep(); }
-  } }
-  if (G.taxi) { const t = G.taxi; if (Math.hypot(t.x - px, t.y - py) < 55) { if (t.phase === 'pickup') { const d = TAXI_SPOTS[Math.floor(Math.random() * TAXI_SPOTS.length)]; t.x = d.x; t.y = d.y; t.phase = 'drop'; G.objective = 'Taxi: drop off passenger'; showMsg('Passenger in — go!'); } else { const fare = 60 + Math.floor(Math.random() * 90); player.cash += fare; G.taxiCount++; showMsg('Fare paid +$' + fare); snd.cash(); G.taxi = null; G.objective = 'Free roam — T for another fare'; save(); } } }
-  if (player.health <= 0) { G.state = 'over'; G.over = 'wasted'; }
-  if (peds.length < 40) spawnPeds(6, px, py);
-  snd.music(dt);
-}
-function walkPlayer(dt) {
-  let dx = (keys['d'] || keys['arrowright'] ? 1 : 0) - (keys['a'] || keys['arrowleft'] ? 1 : 0);
-  let dy = (keys['s'] || keys['arrowdown'] ? 1 : 0) - (keys['w'] || keys['arrowup'] ? 1 : 0);
-  const sp = (keys['shift'] ? 215 : 125);
-  if (dx || dy) { const l = Math.hypot(dx, dy); dx /= l; dy /= l; player.angle = Math.atan2(dy, dx); const nx = player.x + dx * sp * dt, ny = player.y + dy * sp * dt; if (!collideRect(nx, player.y, 11, world.buildings) && !isWater(nx, player.y)) player.x = nx; if (!collideRect(player.x, ny, 11, world.buildings) && !isWater(player.x, ny)) player.y = ny; }
-  player.x = Math.max(16, Math.min(3140, player.x)); player.y = Math.max(16, Math.min(WORLD_H - 16, player.y));
-  player.angle = Math.atan2(mouse.y - H() / 2, mouse.x - W() / 2);
-}
-function drivePlayer(dt) {
-  const c = player.car; const up = keys['w'] || keys['arrowup'], down = keys['s'] || keys['arrowdown'];
-  const left = keys['a'] || keys['arrowleft'], right = keys['d'] || keys['arrowright'];
-  if (up) c.speed += 260 * dt; if (down) c.speed -= (c.speed > 5 ? 320 : 150) * dt;
-  c.speed -= c.speed * 0.55 * dt; if (!up && !down) c.speed -= Math.sign(c.speed) * Math.min(Math.abs(c.speed), 40 * dt);
-  c.speed = Math.max(-130, Math.min(330, c.speed));
-  const steer = (left ? -1 : 0) + (right ? 1 : 0);
-  if (Math.abs(c.speed) > 4) c.angle += steer * 1.9 * dt * Math.sign(c.speed) * Math.min(1, Math.abs(c.speed) / 120);
-  if (keys[' '] && Math.abs(c.speed) > 60) { skids.push({ x: c.x, y: c.y, life: 6 }); c.speed *= (1 - 1.4 * dt); }
-  if (Math.abs(c.speed) > 190 && (left || right)) skids.push({ x: c.x, y: c.y, life: 5 });
-  moveCar(c, dt, true); snd.engine(c.speed / 330);
-}
-function moveCar(c, dt, isPlayer) {
-  const nx = c.x + Math.cos(c.angle) * c.speed * dt, ny = c.y + Math.sin(c.angle) * c.speed * dt;
-  const hit = collideRect(nx, ny, 17, world.buildings);
-  if (hit || isWater(nx, ny) || nx < 20 || nx > 3145 || ny < 20 || ny > WORLD_H - 20) {
-    if (Math.abs(c.speed) > 90) { c.health -= 14; burst(c.x, c.y, '#ffb703', 8); snd.crash(); if (isPlayer) G.shake = Math.max(G.shake, 6); if (c.health <= 0 && !c.dead) { c.dead = true; burst(c.x, c.y, '#e63946', 22, 140); if (isPlayer && player.car === c) { player.health -= 25; player.car = null; player.x = c.x + 30; player.y = c.y; } } }
-    c.speed *= -0.3; return;
+  if (best) {
+    player.car = best; best.driver = true;
+    if (best.kind === 'parked' || best.kind === 'traffic') { if (!best.isCoupe) { addWanted(2); toast('Vehicle stolen!'); } }
+    if (best.kind === 'traffic') best.kind = 'civil';
+    audio.ensure();
   }
-  c.x = nx; c.y = ny;
-  for (const o of cars) { if (o !== c && !o.dead && Math.hypot(o.x - c.x, o.y - c.y) < 32) { if (Math.abs(c.speed) > 70) { o.health -= 9; c.health -= 6; burst(c.x, c.y, '#ccc', 6); snd.crash(); if (isPlayer) { crime(0.4); G.shake = Math.max(G.shake, 4); } } c.speed *= 0.55; o.speed *= 0.6; } }
 }
-function updateCars(dt) {
+function hurtPlayer(dmg) {
+  player.hp -= dmg; state.shake = Math.max(state.shake, 3);
+  if (player.hp <= 0 && state.screen === 'play') { state.screen = 'wasted'; onDeath(false); }
+}
+function onDeath(busted) {
+  const penalty = Math.min(state.cash, busted ? 150 : 200);
+  state.cash -= penalty; state.wanted = 0; state.wantedHeat = 0;
+  if (state.missionActive) failMission(busted ? 'busted' : 'wasted');
+  audio.setEngine(false, 0); audio.setSiren(false);
+  setTimeout(() => {
+    player.hp = 100; player.car = null;
+    if (busted) { player.x = 950; player.y = 985; } else { player.x = 1950; player.y = 545; }
+    state.screen = 'play'; saveGame();
+  }, 2600);
+}
+
+// ---------- update ----------
+function moveEntity(e, nx, ny, r) {
+  if (!collideBuildings(world.buildings, nx, e.y, r)) e.x = nx;
+  if (!collideBuildings(world.buildings, e.x, ny, r)) e.y = ny;
+  e.x = Math.max(20, Math.min(WORLD_W - 20, e.x));
+  e.y = Math.max(20, Math.min(WORLD_H - 20, e.y));
+}
+function updatePlayer(dt) {
+  player.shootCd = Math.max(0, player.shootCd - dt); player.punchCd = Math.max(0, player.punchCd - dt);
+  if (state.dialogue) { audio.setEngine(false, 0); return; }
+  if (tryTalk()) return;
+  if (player.car) {
+    const c = player.car;
+    const fwd = (keys['w'] || keys['arrowup']) ? 1 : 0, back = (keys['s'] || keys['arrowdown']) ? 1 : 0;
+    const left = (keys['a'] || keys['arrowleft']) ? 1 : 0, right = (keys['d'] || keys['arrowright']) ? 1 : 0;
+    const accel = c.hp <= 0 ? 0 : 340;
+    if (fwd) c.speed += accel * dt;
+    if (back) c.speed -= (c.speed > 10 ? 420 : 200) * dt;
+    if (!fwd && !back) c.speed -= c.speed * 0.7 * dt;
+    if (keys[' ']) { c.speed -= c.speed * 3.2 * dt; if (Math.abs(c.speed) > 60 && rnd() > 0.4) skids.push({ x: c.x - Math.cos(c.angle) * 14, y: c.y - Math.sin(c.angle) * 14, life: 6 }); }
+    const maxSp = c.isCop ? 430 : 390;
+    c.speed = Math.max(-150, Math.min(maxSp, c.speed));
+    const steer = (left ? -1 : 0) + (right ? 1 : 0);
+    if (Math.abs(c.speed) > 4) { c.angle += steer * 1.9 * dt * Math.sign(c.speed) * Math.min(1, Math.abs(c.speed) / 120); if (Math.abs(c.speed) > 140 && steer !== 0 && rnd() > 0.5) skids.push({ x: c.x, y: c.y, life: 5 }); }
+    const nx = c.x + Math.cos(c.angle) * c.speed * dt, ny = c.y + Math.sin(c.angle) * c.speed * dt;
+    const hitB = collideBuildings(world.buildings, nx, ny, 20);
+    if (hitB) { if (Math.abs(c.speed) > 130) { damageCar(c, Math.abs(c.speed) * 0.05); hurtPlayer(3); audio.crash(); state.shake = 6; burst(c.x, c.y, '#ffe066', 8, 130); } c.speed *= -0.25; }
+    else { c.x = Math.max(30, Math.min(WORLD_W - 30, nx)); c.y = Math.max(30, Math.min(BEACH_Y + 60, ny)); }
+    if (c.y > BEACH_Y + 90) c.speed *= 0.92;
+    player.x = c.x; player.y = c.y; player.angle = c.angle;
+    // collisions with other cars / peds
+    for (const o of cars) {
+      if (o === c) continue;
+      const d = Math.hypot(o.x - c.x, o.y - c.y);
+      if (d < 40 && d > 0.01) {
+        const push = (40 - d) / 2, ux = (o.x - c.x) / d, uy = (o.y - c.y) / d;
+        o.x += ux * push; o.y += uy * push;
+        if (Math.abs(c.speed) > 90) { damageCar(o, 9); damageCar(c, 5); audio.crash(); burst(o.x, o.y, '#ffe066', 7, 120); addWanted(1.4); if (o.isCop) addWanted(1.5); o.speed = c.speed * 0.4; }
+        c.speed *= 0.82;
+      }
+    }
+    for (const p of peds) {
+      if (p.dead) continue;
+      if (Math.hypot(p.x - c.x, p.y - c.y) < 26 && Math.abs(c.speed) > 40) { hurtPed(p, 60, false); audio.crash(); state.shake = 5; c.speed *= 0.7; }
+      else if (Math.hypot(p.x - c.x, p.y - c.y) < 70 && Math.abs(c.speed) > 120) { p.state = 'flee'; p.fleeT = 2; }
+    }
+    audio.setEngine(true, Math.abs(c.speed) / 390);
+    if (c.hp < 35 && c.hp > 0) { c.smokeT -= dt; if (c.smokeT <= 0) { c.smokeT = 0.09; particles.push({ x: c.x, y: c.y - 6, vx: (rnd() - 0.5) * 20, vy: -30 - rnd() * 20, life: 0.8, max: 0.8, color: '#555555', size: 5 + rnd() * 5 }); } }
+    if (c.hp <= 0) { hurtPlayer(14 * dt); }
+  } else {
+    audio.setEngine(false, 0);
+    let mx = 0, my = 0;
+    if (keys['w'] || keys['arrowup']) my -= 1;
+    if (keys['s'] || keys['arrowdown']) my += 1;
+    if (keys['a'] || keys['arrowleft']) mx -= 1;
+    if (keys['d'] || keys['arrowright']) mx += 1;
+    const sprint = (keys['shift']) ? 1.55 : 1;
+    const spd = 165 * sprint;
+    if (mx || my) {
+      const l = Math.hypot(mx, my); mx /= l; my /= l;
+      player.angle = Math.atan2(my, mx);
+      const nx = player.x + mx * spd * dt, ny = player.y + my * spd * dt;
+      if (ny < BEACH_Y + 130) moveEntity(player, nx, ny, player.radius);
+      else { if (!collideBuildings(world.buildings, nx, player.y, player.radius)) player.x = nx; toastOnceWater(); }
+    } else {
+      const wx = camX + mouseX, wy = camY + mouseY;
+      if (mouseDown) player.angle = Math.atan2(wy - player.y, wx - player.x);
+    }
+    if (mouseDown) playerShoot();
+    if (keys['f']) doPunch();
+  }
+  // pickups
+  for (const pk of world.pickups) {
+    if (pk.taken) { pk.respawn -= dt; if (pk.respawn <= 0) pk.taken = false; continue; }
+    if (Math.hypot(pk.x - player.x, pk.y - player.y) < 30) {
+      pk.taken = true; pk.respawn = 45; audio.pickup();
+      if (pk.type === 'health') { player.hp = Math.min(100, player.hp + 40); toast('+ Health'); if (player.car) player.car.hp = Math.min(100, player.car.hp + 30); }
+      if (pk.type === 'ammo') { player.ammo.pistol += 30; player.ammo.smg += 40; toast('+ Ammo'); }
+      if (pk.type === 'cash') { state.cash += 75; audio.cash(); toast('Cash crate +$75'); }
+      if (pk.type === 'smg') { player.hasSmg = true; player.ammo.smg += 90; player.weapon = 'smg'; toast('SMG acquired! Press 1 / 2 to switch'); }
+    }
+  }
+}
+let waterToastT = 0;
+function toastOnceWater() { if (elapsed - waterToastT > 4) { waterToastT = elapsed; toast('The water is too deep — stay on the beach'); } }
+
+function updateTraffic(dt) {
   for (const c of cars) {
-    if (c.dead || c.driver === 'player') continue;
-    if (c.police) continue;
-    if (!c.traffic) { c.speed *= (1 - 2 * dt); continue; }
-    c.aiT -= dt;
-    // stop near player car / other cars ahead
-    const fx = c.x + Math.cos(c.angle) * 52, fy = c.y + Math.sin(c.angle) * 52;
-    let blocked = cars.some(o => o !== c && Math.hypot(o.x - fx, o.y - fy) < 34) || (player.car && Math.hypot(player.car.x - fx, player.car.y - fy) < 34) || (!player.car && Math.hypot(player.x - fx, player.y - fy) < 26);
-    const atCross = isRoad(c.x, c.y) && ((c.x % BLOCK) < ROAD) && ((c.y % BLOCK) < ROAD);
-    if (blocked) c.speed = Math.max(0, c.speed - 200 * dt);
-    else c.speed += (105 - c.speed) * dt * 0.8;
-    if (c.aiT <= 0) { c.aiT = 0.6 + Math.random(); if (atCross && Math.random() < 0.45) { const turn = Math.random() < 0.5 ? Math.PI / 2 : -Math.PI / 2; c.angle = Math.round((c.angle + turn) / (Math.PI / 2)) * (Math.PI / 2); } }
-    if (G.chaseCar === c) { c.speed = 165; if (Math.random() < dt * 0.2) c.angle += (Math.random() - 0.5); }
-    moveCar(c, dt, false);
+    if (c === player.car || c.dead || c.kind === 'parked' || c.isCop) continue;
+    c.aiTimer -= dt;
+    // stop near player car crossing / near other stopped cars
+    let blocked = false;
+    for (const o of cars) { if (o !== c && Math.hypot(o.x - (c.x + Math.cos(c.angle) * 52), o.y - (c.y + Math.sin(c.angle) * 52)) < 30) blocked = true; }
+    if (player.car && Math.hypot(player.car.x - (c.x + Math.cos(c.angle) * 55), player.car.y - (c.y + Math.sin(c.angle) * 55)) < 32) blocked = true;
+    // intersection stop: brief pause when entering a crossing on a timer cycle
+    const nearCross = ROAD_XS.some(rx => Math.abs(c.x - rx) < 60) && ROAD_YS.some(ry => Math.abs(c.y - ry) < 60);
+    const target = (blocked || (nearCross && ((elapsed + c.x * 0.01) % 7) < 0.7)) ? 0 : c.targetSpeed;
+    c.speed += Math.sign(target - c.speed) * Math.min(Math.abs(target - c.speed), 200 * dt);
+    // follow road: steer toward lane ahead; at intersections sometimes turn
+    const aheadX = c.x + Math.cos(c.angle) * 90, aheadY = c.y + Math.sin(c.angle) * 90;
+    if (!isRoad(aheadX, aheadY) || aheadY > BEACH_Y - 30) {
+      // find a road direction
+      let bestA = c.angle, bestScore = -1;
+      for (const a of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) {
+        const tx = c.x + Math.cos(a) * 110, ty = c.y + Math.sin(a) * 110;
+        let score = isRoad(tx, ty) ? 1 : 0; if (Math.abs(a - c.angle) < 0.1) score += 0.4; if (ty > BEACH_Y - 20) score = -1;
+        if (score > bestScore) { bestScore = score; bestA = a; }
+      }
+      let diff = bestA - c.angle; while (diff > Math.PI) diff -= Math.PI * 2; while (diff < -Math.PI) diff += Math.PI * 2;
+      c.angle += Math.max(-2.2 * dt, Math.min(2.2 * dt, diff));
+    } else if (c.aiTimer <= 0) {
+      c.aiTimer = 1 + rnd() * 2;
+      // at intersection, chance to turn
+      const atCross = ROAD_XS.some(rx => Math.abs(c.x - rx) < 34) && ROAD_YS.some(ry => Math.abs(c.y - ry) < 34);
+      if (atCross && rnd() > 0.55) { const turn = rnd() > 0.5 ? Math.PI / 2 : -Math.PI / 2; c.angle += turn; c.angle = Math.round(c.angle / (Math.PI / 2)) * (Math.PI / 2); }
+    }
+    // lane offset keep: nudge toward lane centre
+    c.x += Math.cos(c.angle) * c.speed * dt; c.y += Math.sin(c.angle) * c.speed * dt;
+    if (collideBuildings(world.buildings, c.x, c.y, 20)) { c.x -= Math.cos(c.angle) * c.speed * dt * 1.4; c.y -= Math.sin(c.angle) * c.speed * dt * 1.4; c.angle += Math.PI / 2; c.speed = 40; }
+    c.x = Math.max(30, Math.min(WORLD_W - 30, c.x)); c.y = Math.max(30, Math.min(BEACH_Y - 10, c.y));
+  }
+  // police cars pursue
+  for (const c of cops) {
+    if (c.dead || c === player.car) continue;
+    const tx = player.x, ty = player.y;
+    const d = Math.hypot(tx - c.x, ty - c.y);
+    const want = Math.atan2(ty - c.y, tx - c.x);
+    let diff = want - c.angle; while (diff > Math.PI) diff -= Math.PI * 2; while (diff < -Math.PI) diff += Math.PI * 2;
+    c.angle += Math.max(-2.4 * dt, Math.min(2.4 * dt, diff * 2));
+    const top = player.car ? 400 : 300;
+    c.speed += Math.sign((d > 55 ? top : 0) - c.speed) * 260 * dt;
+    c.x += Math.cos(c.angle) * c.speed * dt; c.y += Math.sin(c.angle) * c.speed * dt;
+    if (collideBuildings(world.buildings, c.x, c.y, 20)) { c.speed *= -0.4; c.x += Math.cos(c.angle + Math.PI) * 8; }
+    if (d < 44 && player.car && Math.abs(c.speed) > 60) { damageCar(player.car, 10 * dt * 3); }
+    if (d < 40 && !player.car) { state.bustedT += dt; if (state.bustedT > 2.2) { state.bustedT = 0; state.screen = 'busted'; onDeath(true); } }
+    else if (!player.car) state.bustedT = Math.max(0, state.bustedT - dt);
   }
 }
 function updatePeds(dt) {
-  const px = player.car ? player.car.x : player.x, py = player.car ? player.car.y : player.y;
   for (const p of peds) {
     if (p.dead) continue;
-    p.walkT -= dt; p.fireCd -= dt; if (p.flee > 0) p.flee -= dt;
-    const d = Math.hypot(px - p.x, py - p.y);
-    let mvx = 0, mvy = 0, sp = p.speed;
-    if (p.hostile) { if (d > 150) { mvx = (px - p.x) / d; mvy = (py - p.y) / d; sp = 65; } else if (p.fireCd <= 0) { p.fireCd = 1.1 + Math.random(); npcShoot(p); } }
-    else if (p.cop) { if (d > 60) { mvx = (px - p.x) / d; mvy = (py - p.y) / d; sp = 105; } else if (G.wanted >= 2 && p.fireCd <= 0) { p.fireCd = 1.4 + Math.random(); npcShoot(p); } else if (d < 30 && !player.car) { G.state = 'over'; G.over = 'busted'; } }
-    else if (p.flee > 0 || (player.car && Math.abs(player.car.speed) > 120 && d < 110)) { if (d > 1) { mvx = (p.x - px) / d; mvy = (p.y - py) / d; sp = 120; } }
-    else { if (p.walkT <= 0) { p.walkT = 2 + Math.random() * 3; p.angle = Math.floor(Math.random() * 4) * Math.PI / 2; } mvx = Math.cos(p.angle); mvy = Math.sin(p.angle); }
-    if (mvx || mvy) { const nx = p.x + mvx * sp * dt, ny = p.y + mvy * sp * dt; if (!collideRect(nx, ny, 9, world.buildings) && !isWater(nx, ny)) { p.x = nx; p.y = ny; } else p.angle += Math.PI / 2; p.angle = Math.atan2(mvy, mvx); }
-    if (player.car && Math.abs(player.car.speed) > 40 && Math.hypot(player.car.x - p.x, player.car.y - p.y) < 24) { hurtPed(p, 60, player.car.angle); crime(1); player.car.speed *= 0.7; }
+    p.timer -= dt; p.shootCd = Math.max(0, p.shootCd - dt);
+    const dPlayer = Math.hypot(player.x - p.x, player.y - p.y);
+    if (p.kind === 'cop') {
+      if (state.wanted >= 1 && dPlayer < 420) {
+        // chase
+        const want = Math.atan2(player.y - p.y, player.x - p.x); p.angle = want;
+        if (dPlayer > 130) moveEntity(p, p.x + Math.cos(want) * 150 * dt, p.y + Math.sin(want) * 150 * dt, 10);
+        if (state.wanted >= 2 && dPlayer < 300 && p.shootCd <= 0 && !player.car) {
+          p.shootCd = 0.9 + rnd() * 0.5;
+          bullets.push({ x: p.x, y: p.y, vx: Math.cos(want) * 700, vy: Math.sin(want) * 700, life: 0.5, from: 'cop', dmg: 7 });
+          audio.shoot(false);
+        }
+        if (dPlayer < 30 && !player.car) { state.bustedT += dt; if (state.bustedT > 2.2) { state.bustedT = 0; state.screen = 'busted'; onDeath(true); } }
+        continue;
+      }
+    }
+    if (p.kind === 'thug') {
+      const want = Math.atan2(player.y - p.y, player.x - p.x); p.angle = want;
+      if (dPlayer < 320) {
+        if (dPlayer > 120) moveEntity(p, p.x + Math.cos(want) * 130 * dt, p.y + Math.sin(want) * 130 * dt, 10);
+        if (p.shootCd <= 0 && dPlayer < 280) { p.shootCd = 1 + rnd() * 0.6; bullets.push({ x: p.x, y: p.y, vx: Math.cos(want) * 650, vy: Math.sin(want) * 650, life: 0.5, from: 'thug', dmg: 8 }); audio.shoot(false); }
+        continue;
+      }
+    }
+    if (p.state === 'flee' || p.fleeT > 0) {
+      p.fleeT -= dt;
+      const away = Math.atan2(p.y - player.y, p.x - player.x);
+      moveEntity(p, p.x + Math.cos(away) * 200 * dt, p.y + Math.sin(away) * 200 * dt, 10);
+      if (p.fleeT <= 0) p.state = 'walk';
+      continue;
+    }
+    // sidewalk wander: prefer non-road, drift
+    if (p.timer <= 0) { p.timer = 2 + rnd() * 3; p.angle = rnd() * Math.PI * 2; }
+    const nx = p.x + Math.cos(p.angle) * 55 * dt, ny = p.y + Math.sin(p.angle) * 55 * dt;
+    if (ny < BEACH_Y + 100) moveEntity(p, nx, ny, 10); else p.angle = -Math.PI / 2;
   }
-  peds = peds.filter(p => !p.dead || Math.random() < 0.999);
-  peds = peds.filter(p => Math.hypot(p.x - px, p.y - py) < 1500);
 }
-function npcShoot(p) { const tx = player.car ? player.car.x : player.x, ty = player.car ? player.car.y : player.y; const a = Math.atan2(ty - p.y, tx - p.x) + (Math.random() - 0.5) * 0.16; bullets.push({ x: p.x, y: p.y, vx: Math.cos(a) * 560, vy: Math.sin(a) * 560, life: 0.6, from: 'npc' }); snd.shoot(false); }
 function updateBullets(dt) {
-  for (const b of bullets) { b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
-    if (collideRect(b.x, b.y, 2, world.buildings)) b.life = 0;
-    if (b.from === 'player') { for (const p of peds) { if (!p.dead && Math.hypot(p.x - b.x, p.y - b.y) < 13) { hurtPed(p, 34, Math.atan2(b.vy, b.vx)); b.life = 0; break; } } if (b.life > 0) for (const c of cars) { if (!c.dead && c.driver !== 'player' && Math.hypot(c.x - b.x, c.y - b.y) < 20) { c.health -= 16; burst(b.x, b.y, '#ffb703', 4); if (c.police) crime(0.8); b.life = 0; if (c.health <= 0) { c.dead = true; burst(c.x, c.y, '#e63946', 18, 130); } break; } } }
-    else { const t = player.car || player; if (Math.hypot(t.x - b.x, t.y - b.y) < (player.car ? 21 : 12)) { if (player.car) { player.car.health -= 5; if (player.car.health <= 0 && !player.car.dead) { player.car.dead = true; player.health -= 20; player.x = player.car.x + 30; player.y = player.car.y; player.car = null; } } else player.health -= 7; burst(b.x, b.y, '#e63946', 4); b.life = 0; } }
+  for (const b of bullets) {
+    b.x += b.vx * dt; b.y += b.vy * dt; b.life -= dt;
+    if (collideBuildings(world.buildings, b.x, b.y, 3)) { b.life = 0; burst(b.x, b.y, '#ffe066', 2, 60); continue; }
+    if (b.from === 'player') {
+      for (const p of peds) { if (!p.dead && Math.hypot(p.x - b.x, p.y - b.y) < 13) { hurtPed(p, b.dmg, false); b.life = 0; break; } }
+      if (b.life > 0) for (const c of cars) { if (c !== player.car && !c.dead && Math.abs(c.x - b.x) < 26 && Math.abs(c.y - b.y) < 16) { damageCar(c, b.dmg); if (c.isCop) addWanted(2); b.life = 0; break; } }
+    } else {
+      if (!player.car && Math.hypot(player.x - b.x, player.y - b.y) < 12) { hurtPlayer(b.dmg); b.life = 0; }
+      else if (player.car && Math.abs(player.car.x - b.x) < 26 && Math.abs(player.car.y - b.y) < 16) { damageCar(player.car, b.dmg * 0.5); b.life = 0; }
+    }
   }
   bullets = bullets.filter(b => b.life > 0);
+  for (const pt of particles) { pt.x += pt.vx * dt; pt.y += pt.vy * dt; pt.vx *= 0.92; pt.vy *= 0.92; pt.life -= dt; }
+  particles = particles.filter(p => p.life > 0);
+  for (const s of skids) s.life -= dt;
+  skids = skids.filter(s => s.life > 0);
+  if (skids.length > 500) skids.splice(0, skids.length - 500);
 }
-function updatePolice(dt) {
+function updateWanted(dt) {
+  // decay when unseen
+  let seen = false;
+  for (const c of cops) if (!c.dead && Math.hypot(c.x - player.x, c.y - player.y) < 430) seen = true;
+  for (const p of peds) if (p.kind === 'cop' && !p.dead && Math.hypot(p.x - player.x, p.y - player.y) < 320) seen = true;
+  if (!seen && state.wanted > 0) {
+    state.hideTimer += dt;
+    if (state.hideTimer > 6) { state.wantedHeat = Math.max(0, state.wantedHeat - 3); state.wanted = Math.min(state.wanted, Math.floor(state.wantedHeat / 3)); state.hideTimer = 3; if (state.wanted === 0) { state.wantedHeat = 0; toast('You lost the police'); } }
+  } else state.hideTimer = 0;
+  const wantCops = state.wanted === 0 ? 0 : (state.wanted <= 2 ? state.wanted : state.wanted + 1);
+  const aliveCops = cops.filter(c => !c.dead && c !== player.car);
+  if (aliveCops.length < wantCops) { state.copSpawnT = (state.copSpawnT || 0) - dt; if (state.copSpawnT <= 0) { spawnCopCar(); state.copSpawnT = 2.5; } }
+  if (state.wanted >= 2) { const foot = peds.filter(p => p.kind === 'cop' && !p.dead).length; if (foot < state.wanted - 1 && rnd() > 0.995) spawnFootCop(); }
+  if (state.wanted === 0 && cops.length) { for (const c of cops) { c.dead = true; } cops = []; cars = cars.filter(c => !c.isCop || c === player.car); }
+  audio.setSiren(state.wanted > 0 && state.screen === 'play');
+  audio.updateSiren(elapsed);
+}
+function updateTaxi(dt) {
+  state.taxiCd -= dt;
+  if (!state.taxi && state.taxiCd <= 0 && !state.missionActive) {
+    const spots = [[1200, 300], [2200, 1620], [500, 700], [2760, 700], [1700, 1620], [950, 400]];
+    const s = spots[(rnd() * spots.length) | 0];
+    state.taxi = { phase: 'pickup', x: s[0], y: s[1], dx: 400 + rnd() * 2400, dy: 300 + rnd() * 1600, pay: 120 + ((rnd() * 160) | 0) };
+    toast('Taxi fare available — reach the blue marker, then drive the passenger');
+  }
+  if (state.taxi) {
+    const t = state.taxi;
+    const px = player.car ? player.car.x : player.x, py = player.car ? player.car.y : player.y;
+    if (t.phase === 'pickup' && player.car && Math.hypot(px - t.x, py - t.y) < 60) { t.phase = 'drop'; toast('Passenger in! Drive to the green drop-off'); audio.cash(); }
+    else if (t.phase === 'drop' && player.car && Math.hypot(px - t.dx, py - t.dy) < 65) { state.cash += t.pay; toast('Fare complete +$' + t.pay); audio.mission(); state.taxi = null; state.taxiCd = 14; saveGame(); }
+  }
+}
+function update(dt) {
+  elapsed += dt;
+  if (shotMode) { player.hp = 100; if (player.car) player.car.hp = 100; }
+  state.time += dt / 60; if (state.time >= 24) { state.time -= 24; state.day++; }
+  if (state.msgT > 0) state.msgT -= dt;
+  if (state.shake > 0) state.shake = Math.max(0, state.shake - dt * 22);
+  if (state.screen !== 'play') { audio.setEngine(false, 0); return; }
+  updatePlayer(dt);
+  updateTraffic(dt); updatePeds(dt); updateBullets(dt); updateWanted(dt); updateTaxi(dt);
+  checkMission();
+  if (state.timerOn) { state.timer -= dt; if (state.timer <= 0) { state.timerOn = false; failMission('out of time'); } }
   const px = player.car ? player.car.x : player.x, py = player.car ? player.car.y : player.y;
-  const wantCars = G.wanted >= 1 ? Math.min(1 + Math.floor(G.wanted), 6) : 0;
-  if (cops.filter(c => c.police && !c.dead).length < wantCars && Math.random() < dt * 0.8) {
-    const a = Math.random() * 6.28, c = mkCar(px + Math.cos(a) * 520, py + Math.sin(a) * 520, a, '#dfe6ee', { police: true, driver: 'cop' });
-    if (!collideRect(c.x, c.y, 17, world.buildings) && !isWater(c.x, c.y)) { cars.push(c); cops.push(c); }
-  }
-  if (G.wanted >= 2 && peds.filter(p => p.cop && !p.dead).length < Math.floor(G.wanted) && Math.random() < dt * 0.5) {
-    const a = Math.random() * 6.28; const p = { x: px + Math.cos(a) * 380, y: py + Math.sin(a) * 380, angle: 0, health: 45, speed: 105, color: '#22406b', flee: 0, cop: true, hostile: false, fireCd: 1, walkT: 0, dead: false };
-    if (!collideRect(p.x, p.y, 9, world.buildings)) peds.push(p);
-  }
-  if (Math.random() < dt * 2 && (G.wanted >= 1)) snd.sirenTick(performance.now() / 1000);
-  for (const c of cops) {
-    if (c.dead || c.driver === 'player') continue;
-    const d = Math.hypot(px - c.x, py - c.y), ta = Math.atan2(py - c.y, px - c.x);
-    let diff = ta - c.angle; while (diff > Math.PI) diff -= 6.283; while (diff < -Math.PI) diff += 6.283;
-    c.angle += Math.max(-2.4 * dt, Math.min(2.4 * dt, diff * 2.2 * dt * 3));
-    c.speed += ((d > 55 ? 235 : -60) - c.speed) * dt * 1.4;
-    moveCar(c, dt, false);
-    if (!player.car && d < 30) { G.state = 'over'; G.over = 'busted'; }
-    if (player.car && d < 34 && Math.abs(player.car.speed) < 12) { G.bustT = (G.bustT || 0) + dt; if (G.bustT > 1.6) { G.state = 'over'; G.over = 'busted'; } } else G.bustT = 0;
-  }
-  cops = cops.filter(c => !c.dead);
+  camX += ((px - W / 2) - camX) * Math.min(1, dt * 6);
+  camY += ((py - H / 2) - camY) * Math.min(1, dt * 6);
+  camX = Math.max(0, Math.min(WORLD_W - W, camX)); camY = Math.max(0, Math.min(WORLD_H - H, camY));
+  audio.updateMusic(dt, true);
 }
-// ---------- drawing ----------
-function drawCar(c, cam) {
-  ctx.save(); ctx.translate(c.x - cam.x, c.y - cam.y); ctx.rotate(c.angle);
-  ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.fillRect(-19, -9, 42, 22);
-  ctx.fillStyle = c.dead ? '#333' : c.color; ctx.beginPath(); ctx.roundRect(-20, -11, 40, 22, 6); ctx.fill();
-  ctx.fillStyle = '#bfe9ff'; ctx.fillRect(-4, -8, 12, 16); ctx.fillRect(-14, -7, 6, 14);
-  ctx.fillStyle = '#111'; [[-13, -12], [11, -12], [-13, 9], [11, 9]].forEach(w => ctx.fillRect(w[0], w[1], 8, 4));
-  if (c.police) { ctx.fillStyle = '#22406b'; ctx.fillRect(-8, -11, 18, 22); ctx.fillStyle = (Math.floor(performance.now() / 300) % 2 ? '#ff2e2e' : '#2e7bff'); ctx.fillRect(-3, -6, 8, 12); ctx.fillStyle = '#fff'; ctx.font = 'bold 8px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('SVPD', 1, 3); }
+
+// ---------- rendering ----------
+function dayTint() {
+  const t = state.time;
+  if (t >= 6 && t < 17) return { a: 0, color: '0,0,0' };
+  if (t >= 17 && t < 19.5) return { a: 0.22 * (1 - Math.abs(t - 18.2) / 1.4), color: '255,110,60', dusk: true };
+  if (t >= 19.5 || t < 5) return { a: 0.42, color: '8,10,40' };
+  return { a: 0.2, color: '40,40,90' };
+}
+function isNight() { return state.time >= 19 || state.time < 5.5; }
+function drawWorld() {
+  // ground
+  ctx.fillStyle = '#5d8a4a'; ctx.fillRect(camX - 10, camY - 10, W + 20, H + 20);
+  // beach + water
+  ctx.fillStyle = '#e8cf8f'; ctx.fillRect(camX - 10, BEACH_Y, W + 20, WORLD_H - BEACH_Y + 10);
+  ctx.fillStyle = '#1b7f9e';
+  const wy = BEACH_Y + 180;
+  ctx.fillRect(camX - 10, wy, W + 20, WORLD_H - wy + 10);
+  ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 2;
+  for (let i = 0; i < 8; i++) { const yy = wy + 16 + i * 26 + Math.sin(elapsed * 1.4 + i) * 3; ctx.beginPath(); ctx.moveTo(camX, yy); ctx.lineTo(camX + W, yy); ctx.stroke(); }
+  // sidewalks + roads
+  ctx.fillStyle = '#9aa0a6';
+  for (const rx of ROAD_XS) ctx.fillRect(rx - ROAD_W / 2 - 12, 0, ROAD_W + 24, BEACH_Y);
+  for (const ry of ROAD_YS) ctx.fillRect(0, ry - ROAD_W / 2 - 12, WORLD_W, ROAD_W + 24);
+  ctx.fillStyle = '#33363b';
+  for (const rx of ROAD_XS) ctx.fillRect(rx - ROAD_W / 2, 0, ROAD_W, BEACH_Y);
+  for (const ry of ROAD_YS) ctx.fillRect(0, ry - ROAD_W / 2, WORLD_W, ROAD_W);
+  // lane markings
+  ctx.strokeStyle = 'rgba(255,209,102,0.75)'; ctx.lineWidth = 3; ctx.setLineDash([22, 18]);
+  for (const rx of ROAD_XS) { ctx.beginPath(); ctx.moveTo(rx, 0); ctx.lineTo(rx, BEACH_Y); ctx.stroke(); }
+  for (const ry of ROAD_YS) { ctx.beginPath(); ctx.moveTo(0, ry); ctx.lineTo(WORLD_W, ry); ctx.stroke(); }
+  ctx.setLineDash([]);
+  // crosswalks
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  for (const rx of ROAD_XS) for (const ry of ROAD_YS) { for (let i = -2; i <= 2; i++) { ctx.fillRect(rx - ROAD_W / 2 - 4, ry + i * 20 - 5, 12, 10); ctx.fillRect(rx + i * 20 - 5, ry - ROAD_W / 2 - 4, 10, 12); } }
+  // skid marks
+  ctx.fillStyle = 'rgba(20,20,20,0.5)';
+  for (const s of skids) ctx.fillRect(s.x - 3, s.y - 3, 6, 6);
+  // parks drawn as buildings kind park below; props
+  for (const p of world.props) {
+    if (p.x < camX - 60 || p.x > camX + W + 60 || p.y < camY - 60 || p.y > camY + H + 60) continue;
+    if (p.type === 'lamp') {
+      ctx.fillStyle = '#444'; ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
+      if (isNight()) { const g = ctx.createRadialGradient(p.x, p.y, 2, p.x, p.y, 46); g.addColorStop(0, 'rgba(255,220,130,0.5)'); g.addColorStop(1, 'rgba(255,220,130,0)'); ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, 46, 0, 7); ctx.fill(); ctx.fillStyle = '#ffe9a0'; ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, 7); ctx.fill(); }
+    } else if (p.type === 'palm') {
+      ctx.strokeStyle = '#6b4f2a'; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x + 4, p.y - 16 * p.s); ctx.stroke();
+      ctx.strokeStyle = '#2e9e5b'; ctx.lineWidth = 3;
+      for (let i = 0; i < 6; i++) { const a = (i / 6) * Math.PI * 2 + 0.4; ctx.beginPath(); ctx.moveTo(p.x + 4, p.y - 16 * p.s); ctx.quadraticCurveTo(p.x + 4 + Math.cos(a) * 14 * p.s, p.y - 16 * p.s + Math.sin(a) * 8 * p.s - 5, p.x + 4 + Math.cos(a) * 22 * p.s, p.y - 16 * p.s + Math.sin(a) * 12 * p.s + 4); ctx.stroke(); }
+    } else if (p.type === 'crate') {
+      ctx.fillStyle = '#a67c52'; ctx.fillRect(p.x - 9, p.y - 9, 18, 18); ctx.strokeStyle = '#6f4e2e'; ctx.strokeRect(p.x - 9, p.y - 9, 18, 18);
+    }
+  }
+  // buildings
+  for (const b of world.buildings) {
+    if (b.x + b.w / 2 < camX - 40 || b.x - b.w / 2 > camX + W + 40 || b.y + b.h / 2 < camY - 40 || b.y - b.h / 2 > camY + H + 40) continue;
+    if (b.kind === 'park') {
+      ctx.fillStyle = '#2d6a4f'; ctx.fillRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h);
+      ctx.fillStyle = '#40916c'; for (let i = 0; i < 8; i++) ctx.fillRect(b.x - b.w / 2 + 20 + (i * 53) % (b.w - 40), b.y - b.h / 2 + 20 + (i * 37) % (b.h - 40), 26, 26);
+      ctx.fillStyle = '#e9f5ec'; ctx.font = 'bold 15px Arial'; ctx.textAlign = 'center'; ctx.fillText(b.name, b.x, b.y + 5);
+      continue;
+    }
+    ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.fillRect(b.x - b.w / 2 + 7, b.y - b.h / 2 + 9, b.w, b.h);
+    ctx.fillStyle = b.color; ctx.globalAlpha = b.shade || 1; ctx.fillRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h); ctx.globalAlpha = 1;
+    ctx.fillStyle = 'rgba(0,0,0,0.18)'; ctx.fillRect(b.x - b.w / 2, b.y - b.h / 2, b.w, 12);
+    // windows
+    ctx.fillStyle = isNight() ? 'rgba(255,225,140,0.9)' : 'rgba(40,60,90,0.55)';
+    const cols = Math.max(2, (b.w / 26) | 0), rows = Math.max(2, (b.h / 26) | 0);
+    for (let i = 0; i < cols; i++) for (let j = 0; j < rows; j++) { if ((i * 7 + j * 13 + b.x) % 3 === 0 && !isNight()) continue; ctx.fillRect(b.x - b.w / 2 + 8 + i * ((b.w - 16) / cols), b.y - b.h / 2 + 18 + j * ((b.h - 26) / rows), 9, 7); }
+    // sign
+    ctx.fillStyle = 'rgba(10,10,20,0.82)'; const tw = Math.min(b.w - 8, b.name.length * 7.4 + 14);
+    ctx.fillRect(b.x - tw / 2, b.y - b.h / 2 + 2, tw, 16);
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 10px Arial'; ctx.textAlign = 'center'; ctx.fillText(b.name, b.x, b.y - b.h / 2 + 14);
+    if (b.kind === 'police') { ctx.fillStyle = '#7ee8fa'; ctx.font = 'bold 22px Arial'; ctx.fillText('★ POLICE ★', b.x, b.y + 30); }
+    if (b.kind === 'hospital') { ctx.fillStyle = '#e63946'; ctx.font = 'bold 30px Arial'; ctx.fillText('+', b.x, b.y + 34); }
+  }
+  // pickups
+  for (const pk of world.pickups) {
+    if (pk.taken) continue;
+    const bob = Math.sin(elapsed * 3 + pk.x) * 3;
+    ctx.save(); ctx.translate(pk.x, pk.y + bob);
+    if (pk.type === 'health') { ctx.fillStyle = '#fff'; ctx.fillRect(-11, -11, 22, 22); ctx.fillStyle = '#e63946'; ctx.fillRect(-3, -8, 6, 16); ctx.fillRect(-8, -3, 16, 6); }
+    else if (pk.type === 'ammo') { ctx.fillStyle = '#606c38'; ctx.fillRect(-11, -8, 22, 16); ctx.fillStyle = '#ffd166'; ctx.fillRect(-7, -4, 4, 8); ctx.fillRect(1, -4, 4, 8); }
+    else if (pk.type === 'smg') { ctx.fillStyle = '#222'; ctx.fillRect(-16, -4, 32, 8); ctx.fillRect(2, 4, 6, 9); ctx.fillStyle = '#ffd166'; ctx.font = 'bold 9px Arial'; ctx.textAlign = 'center'; ctx.fillText('SMG', 0, -10); }
+    else { ctx.fillStyle = '#a67c52'; ctx.fillRect(-12, -10, 24, 20); ctx.fillStyle = '#2a9d8f'; ctx.font = 'bold 14px Arial'; ctx.textAlign = 'center'; ctx.fillText('$', 0, 5); }
+    ctx.restore();
+  }
+}
+function drawCar(c) {
+  ctx.save(); ctx.translate(c.x, c.y); ctx.rotate(c.angle);
+  ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fillRect(-c.w / 2 + 3, -c.h / 2 + 5, c.w, c.h);
   // headlights at night
-  const tod = G.time; if (tod > 0.7 || tod < 0.25) { const g = ctx.createRadialGradient(26, 0, 4, 60, 0, 70); g.addColorStop(0, 'rgba(255,240,170,0.5)'); g.addColorStop(1, 'rgba(255,240,170,0)'); ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(20, -8); ctx.lineTo(85, -20); ctx.lineTo(85, 20); ctx.lineTo(20, 8); ctx.fill(); ctx.fillStyle = '#fff7ae'; ctx.fillRect(18, -9, 3, 5); ctx.fillRect(18, 4, 3, 5); }
+  if (isNight() && !c.dead) { const g = ctx.createRadialGradient(c.w / 2, 0, 4, c.w / 2 + 70, 0, 80); g.addColorStop(0, 'rgba(255,240,180,0.35)'); g.addColorStop(1, 'rgba(255,240,180,0)'); ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(c.w / 2, -8); ctx.lineTo(c.w / 2 + 85, -22); ctx.lineTo(c.w / 2 + 85, 22); ctx.lineTo(c.w / 2, 8); ctx.fill(); }
+  ctx.fillStyle = c.dead ? '#3a3a3a' : c.color;
+  ctx.beginPath(); ctx.roundRect(-c.w / 2, -c.h / 2, c.w, c.h, 6); ctx.fill();
+  ctx.fillStyle = 'rgba(20,30,45,0.9)'; ctx.fillRect(-4, -c.h / 2 + 3, 14, c.h - 6);
+  ctx.fillStyle = 'rgba(160,210,240,0.85)'; ctx.fillRect(8, -c.h / 2 + 4, 5, c.h - 8); ctx.fillRect(-9, -c.h / 2 + 4, 4, c.h - 8);
+  ctx.fillStyle = '#111'; ctx.fillRect(-c.w / 2 + 3, -c.h / 2 - 2, 9, 5); ctx.fillRect(-c.w / 2 + 3, c.h / 2 - 3, 9, 5); ctx.fillRect(c.w / 2 - 12, -c.h / 2 - 2, 9, 5); ctx.fillRect(c.w / 2 - 12, c.h / 2 - 3, 9, 5);
+  if (c.isCop) { ctx.fillStyle = '#274472'; ctx.fillRect(-c.w / 2, -5, c.w, 10); ctx.fillStyle = '#fff'; ctx.font = 'bold 8px Arial'; ctx.textAlign = 'center'; ctx.fillText('POLICE', 0, 3); const flash = Math.sin(elapsed * 14) > 0; ctx.fillStyle = flash ? '#ff2e4d' : '#2e7dff'; ctx.fillRect(-4, -4, 8, 8); }
+  if (c.isTarget) { ctx.fillStyle = '#ffd166'; ctx.font = 'bold 11px Arial'; ctx.textAlign = 'center'; ctx.fillText('TARGET', 0, -c.h / 2 - 8); }
   ctx.restore();
-  if (c.health < 45 && !c.dead) { ctx.fillStyle = 'rgba(60,60,60,0.55)'; ctx.beginPath(); ctx.arc(c.x - cam.x + Math.random() * 8 - 4, c.y - cam.y - 14 - Math.random() * 8, 6 + Math.random() * 5, 0, 7); ctx.fill(); }
+  if (c.hp < 60 && !c.dead) { ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.beginPath(); ctx.arc(c.x + 8, c.y - 4, 6, 0, 7); ctx.fill(); }
+  // car health in shot scenes / when damaged & near
+  if (c === player.car) { /* HUD shows it */ }
 }
-function draw() {
-  const w = W(), h = H(); if (!G) return;
-  const px = player ? (player.car ? player.car.x : player.x) : 600, py = player ? (player.car ? player.car.y : player.y) : 600;
-  const shx = (Math.random() - 0.5) * G.shake, shy = (Math.random() - 0.5) * G.shake; G.shake *= 0.88;
-  const cam = { x: Math.max(0, Math.min(WORLD_W - w, px - w / 2 + shx)), y: Math.max(0, Math.min(WORLD_H - h, py - h / 2 + shy)) };
-  drawWorld(ctx, cam, w, h, G.time, world);
-  ctx.fillStyle = 'rgba(90,60,30,0.5)'; for (const s of skids) ctx.fillRect(s.x - cam.x - 2, s.y - cam.y - 2, 4, 4);
-  // mission marker
-  let marker = null;
-  if (G.missionActive) { const s = MISSIONS[G.missionIdx].steps[G.stepIdx]; if (s && s.type !== 'shootout') marker = s; if (s && s.type === 'chase' && G.chaseCar) marker = G.chaseCar; if (s && s.type === 'shootout') marker = s; }
-  if (G.taxi) marker = G.taxi;
-  if (marker && G.state !== 'title') { const bob = Math.sin(performance.now() / 250) * 6; ctx.fillStyle = 'rgba(255,209,102,0.3)'; ctx.beginPath(); ctx.arc(marker.x - cam.x, marker.y - cam.y, 34, 0, 7); ctx.fill(); ctx.fillStyle = '#ffd166'; ctx.beginPath(); ctx.moveTo(marker.x - cam.x, marker.y - cam.y - 34 + bob); ctx.lineTo(marker.x - cam.x - 11, marker.y - cam.y - 54 + bob); ctx.lineTo(marker.x - cam.x + 11, marker.y - cam.y - 54 + bob); ctx.fill(); }
-  for (const c of cars) { if (c.x < cam.x - 60 || c.x > cam.x + w + 60 || c.y < cam.y - 60 || c.y > cam.y + h + 60) continue; drawCar(c, cam); }
-  for (const p of peds) { if (p.dead) { ctx.fillStyle = '#7a1f1f'; ctx.beginPath(); ctx.arc(p.x - cam.x, p.y - cam.y, 9, 0, 7); ctx.fill(); continue; } if (p.x < cam.x - 40 || p.x > cam.x + w + 40 || p.y < cam.y - 40 || p.y > cam.y + h + 40) continue; ctx.save(); ctx.translate(p.x - cam.x, p.y - cam.y); ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.beginPath(); ctx.arc(1, 3, 8, 0, 7); ctx.fill(); ctx.fillStyle = p.cop ? '#22406b' : p.hostile ? '#111' : p.color; ctx.beginPath(); ctx.arc(0, 0, 8, 0, 7); ctx.fill(); ctx.fillStyle = '#f2c89b'; ctx.beginPath(); ctx.arc(0, -2, 4.5, 0, 7); ctx.fill(); ctx.restore(); }
-  ctx.fillStyle = '#ffe97a'; for (const b of bullets) ctx.fillRect(b.x - cam.x - 2, b.y - cam.y - 2, 4, 4);
-  for (const p of particles) { ctx.globalAlpha = Math.max(0, p.life * 1.6); ctx.fillStyle = p.color; ctx.fillRect(p.x - cam.x - p.r / 2, p.y - cam.y - p.r / 2, p.r, p.r); } ctx.globalAlpha = 1;
-  if (player && !player.car && G.state !== 'title') { ctx.save(); ctx.translate(player.x - cam.x, player.y - cam.y); ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.beginPath(); ctx.arc(1, 3, 9, 0, 7); ctx.fill(); ctx.fillStyle = '#ff5964'; ctx.beginPath(); ctx.arc(0, 0, 9, 0, 7); ctx.fill(); ctx.fillStyle = '#f2c89b'; ctx.beginPath(); ctx.arc(0, -2, 5, 0, 7); ctx.fill(); ctx.rotate(player.angle); ctx.fillStyle = '#222'; ctx.fillRect(6, -2, 13, 4); ctx.restore(); }
-  // day tint
-  const t = G.time; let tint = 'rgba(0,0,0,0)';
-  if (t > 0.68 && t < 0.8) tint = 'rgba(255,110,40,0.20)'; else if (t >= 0.8 || t < 0.2) tint = 'rgba(8,10,50,0.42)'; else if (t >= 0.2 && t < 0.3) tint = 'rgba(255,170,80,0.10)';
-  ctx.fillStyle = tint; ctx.fillRect(0, 0, w, h);
-  if (G.state === 'title') { drawMinimap(cam); return drawTitle(w, h); }
-  drawHUD(w, h); drawMinimap(cam);
-  if (G.state === 'dialogue') drawDialogue(w, h);
-  if (G.paused) { ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(0, 0, w, h); ctx.fillStyle = '#fff'; ctx.font = 'bold 44px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('PAUSED', w / 2, h / 2); ctx.font = '20px sans-serif'; ctx.fillText('Esc / P to resume — M mute, E enter car, F punch, T taxi', w / 2, h / 2 + 40); }
-  if (G.state === 'over') { ctx.fillStyle = G.over === 'busted' ? 'rgba(20,40,90,0.72)' : 'rgba(90,0,0,0.72)'; ctx.fillRect(0, 0, w, h); ctx.fillStyle = '#fff'; ctx.font = 'bold 64px sans-serif'; ctx.textAlign = 'center'; ctx.fillText(G.over === 'busted' ? 'BUSTED' : 'WASTED', w / 2, h / 2); ctx.font = '20px sans-serif'; ctx.fillText('Click to continue', w / 2, h / 2 + 44); }
+function drawPed(p) {
+  ctx.save(); ctx.translate(p.x, p.y);
+  if (p.dead) { ctx.rotate(Math.PI / 2); ctx.fillStyle = '#5a1f24'; ctx.beginPath(); ctx.arc(0, 0, 9, 0, 7); ctx.fill(); ctx.fillStyle = p.color; ctx.fillRect(-4, -2, 16, 8); ctx.restore(); return; }
+  ctx.rotate(p.angle);
+  ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.beginPath(); ctx.ellipse(2, 3, 10, 7, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = p.kind === 'cop' ? '#274472' : (p.kind === 'thug' ? '#7f1d2d' : p.color);
+  ctx.beginPath(); ctx.roundRect(-7, -8, 15, 16, 5); ctx.fill();
+  ctx.fillStyle = '#f2c79b'; ctx.beginPath(); ctx.arc(4, 0, 5.5, 0, 7); ctx.fill();
+  if (p.kind === 'cop') { ctx.fillStyle = '#16283f'; ctx.fillRect(1, -5.5, 6, 11); ctx.fillStyle = '#ffd166'; ctx.fillRect(2, -1, 2, 2); }
+  if (p.kind === 'thug' || p.kind === 'cop') { ctx.fillStyle = '#222'; ctx.fillRect(8, -2, 10, 3.5); }
+  ctx.restore();
+  if (p.kind === 'thug') { ctx.fillStyle = '#ff5d73'; ctx.font = 'bold 10px Arial'; ctx.textAlign = 'center'; ctx.fillText('!', p.x, p.y - 16); }
 }
-function drawTitle(w, h) {
-  const g = ctx.createLinearGradient(0, 0, 0, h); g.addColorStop(0, 'rgba(20,8,40,0.25)'); g.addColorStop(1, 'rgba(10,10,30,0.75)'); ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
-  ctx.textAlign = 'center'; ctx.fillStyle = '#ff2e88'; ctx.font = 'bold 84px sans-serif'; ctx.fillText('SAN VERANO', w / 2, h * 0.32);
-  ctx.fillStyle = '#4cc9f0'; ctx.font = 'bold 40px sans-serif'; ctx.fillText('NEON COAST', w / 2, h * 0.32 + 52);
-  ctx.fillStyle = '#fff'; ctx.font = '19px sans-serif'; ctx.fillText('An original open-world crime adventure — steal rides, run jobs, outrun the SVPD.', w / 2, h * 0.32 + 88);
-  button(w / 2 - 130, h * 0.55, 260, 54, 'NEW GAME', 'new');
-  if (loadSave()) button(w / 2 - 130, h * 0.55 + 70, 260, 54, 'CONTINUE', 'continue');
-  ctx.fillStyle = 'rgba(255,255,255,0.75)'; ctx.font = '15px sans-serif'; ctx.fillText('WASD drive/walk · Shift sprint · E enter car · Mouse aim, click shoot · F punch · 1/2 weapons · T taxi · M mute', w / 2, h - 36);
+function drawPlayer() {
+  if (player.car) return;
+  ctx.save(); ctx.translate(player.x, player.y); ctx.rotate(player.angle);
+  ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.beginPath(); ctx.ellipse(2, 3, 11, 8, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = '#ff6b35'; ctx.beginPath(); ctx.roundRect(-8, -9, 17, 18, 6); ctx.fill();
+  ctx.fillStyle = '#f2c79b'; ctx.beginPath(); ctx.arc(5, 0, 6, 0, 7); ctx.fill();
+  ctx.fillStyle = '#1d3557'; ctx.fillRect(2, -6, 6, 12);
+  ctx.fillStyle = '#191919'; ctx.fillRect(10, -2.5, player.weapon === 'smg' ? 15 : 11, 4);
+  if (player.punchCd > 0.2) { ctx.fillStyle = '#f2c79b'; ctx.beginPath(); ctx.arc(16, 6, 4, 0, 7); ctx.fill(); }
+  ctx.restore();
 }
-const btns = [];
-function button(x, y, bw, bh, label, id) { btns.push({ x, y, w: bw, h: bh, id }); ctx.fillStyle = 'rgba(10,10,25,0.85)'; ctx.beginPath(); ctx.roundRect(x, y, bw, bh, 10); ctx.fill(); ctx.strokeStyle = '#4cc9f0'; ctx.lineWidth = 2; ctx.stroke(); ctx.fillStyle = '#fff'; ctx.font = 'bold 22px sans-serif'; ctx.textAlign = 'center'; ctx.fillText(label, x + bw / 2, y + bh / 2 + 8); }
-cv.addEventListener('click', e => {
-  snd.ensure();
-  if (!G) return;
-  if (G.state === 'title') { for (const b of btns) if (e.clientX >= b.x && e.clientX <= b.x + b.w && e.clientY >= b.y && e.clientY <= b.y + b.h) { startGame(b.id === 'continue'); } return; }
-  if (G.state === 'over') { respawn(G.over); return; }
-  if (G.state === 'dialogue') { G.dlgIdx++; if (G.dlgIdx >= G.dialogue.length) { G.dialogue = null; beginMission(); } }
-});
-function drawDialogue(w, h) {
-  const d = G.dialogue[G.dlgIdx]; if (!d) return; const ch = CHARACTERS[d.who];
-  ctx.fillStyle = 'rgba(5,5,18,0.88)'; ctx.fillRect(w * 0.14, h - 168, w * 0.72, 128);
-  ctx.strokeStyle = ch.color; ctx.lineWidth = 3; ctx.strokeRect(w * 0.14, h - 168, w * 0.72, 128);
-  ctx.fillStyle = ch.color; ctx.font = 'bold 20px sans-serif'; ctx.textAlign = 'left'; ctx.fillText(ch.name, w * 0.14 + 22, h - 132);
-  ctx.fillStyle = '#fff'; ctx.font = '19px sans-serif'; wrapText(d.text, w * 0.14 + 22, h - 100, w * 0.72 - 44, 26);
-  ctx.fillStyle = '#ffd166'; ctx.font = '14px sans-serif'; ctx.fillText('Click / Space to continue ▸', w * 0.14 + 22, h - 54);
+function drawMarker(x, y, color, label) {
+  const bob = Math.sin(elapsed * 4) * 5;
+  ctx.fillStyle = color; ctx.beginPath(); ctx.moveTo(x, y - 34 + bob); ctx.lineTo(x - 11, y - 56 + bob); ctx.lineTo(x + 11, y - 56 + bob); ctx.fill();
+  ctx.beginPath(); ctx.arc(x, y, 20 + Math.sin(elapsed * 4) * 3, 0, 7); ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.stroke();
+  if (label) { ctx.fillStyle = '#fff'; ctx.font = 'bold 12px Arial'; ctx.textAlign = 'center'; ctx.fillText(label, x, y - 64 + bob); }
 }
-function wrapText(text, x, y, maxW, lh) { const words = text.split(' '); let line = '', yy = y; for (const word of words) { const test = line ? line + ' ' + word : word; if (ctx.measureText(test).width > maxW && line) { ctx.fillText(line, x, yy); yy += lh; line = word; } else line = test; } ctx.fillText(line, x, yy); }
-function drawHUD(w, h) {
-  ctx.textAlign = 'left';
-  ctx.fillStyle = 'rgba(5,5,18,0.65)'; ctx.fillRect(14, 14, 300, 108);
-  ctx.fillStyle = '#333'; ctx.fillRect(24, 24, 200, 16); ctx.fillStyle = player.health > 30 ? '#2ecc71' : '#e63946'; ctx.fillRect(24, 24, 200 * Math.max(0, player.health) / 100, 16);
-  ctx.fillStyle = '#fff'; ctx.font = 'bold 13px sans-serif'; ctx.fillText('HEALTH ' + Math.ceil(player.health), 24, 58);
-  if (player.car) { ctx.fillStyle = '#ffd166'; ctx.fillText('CAR ' + Math.ceil(player.car.health) + '%', 150, 58); }
-  ctx.fillStyle = '#2ecc71'; ctx.font = 'bold 20px sans-serif'; ctx.fillText('$' + player.cash, 24, 84);
-  ctx.fillStyle = '#fff'; ctx.font = '14px sans-serif'; const hh = Math.floor(G.time * 24), mnt = Math.floor((G.time * 24 % 1) * 60);
-  ctx.fillText('Day ' + G.day + '  ' + String(hh).padStart(2, '0') + ':' + String(mnt).padStart(2, '0'), 130, 84);
-  ctx.fillStyle = '#ffd166'; ctx.font = '16px sans-serif'; ctx.fillText((player.weapon === 'smg' ? 'SMG' : 'PISTOL') + '  ammo ' + player.ammo[player.weapon], 24, 108);
-  // stars
-  ctx.font = '26px sans-serif'; for (let i = 0; i < 5; i++) { ctx.fillStyle = i < Math.ceil(G.wanted) ? '#ffd166' : 'rgba(255,255,255,0.25)'; ctx.fillText('★', w - 190 + i * 34, 42); }
-  // objective
-  ctx.fillStyle = 'rgba(5,5,18,0.65)'; const ow = Math.min(560, 30 + ctx.measureText(G.objective).width + 60); ctx.fillRect(w / 2 - ow / 2, 14, ow, 40);
-  ctx.fillStyle = '#ffd166'; ctx.font = 'bold 16px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('▸ ' + G.objective + (G.timer > 0 ? '  (' + Math.ceil(G.timer) + 's)' : ''), w / 2, 40); ctx.textAlign = 'left';
-  if (G.msgT > 0) { ctx.fillStyle = 'rgba(5,5,18,0.7)'; ctx.fillRect(w / 2 - 220, 62, 440, 34); ctx.fillStyle = '#fff'; ctx.font = 'bold 16px sans-serif'; ctx.textAlign = 'center'; ctx.fillText(G.msg, w / 2, 84); ctx.textAlign = 'left'; }
+function drawEntities() {
+  for (const c of cars) if (c.x > camX - 80 && c.x < camX + W + 80 && c.y > camY - 80 && c.y < camY + H + 80) drawCar(c);
+  for (const p of peds) if (p.x > camX - 60 && p.x < camX + W + 60 && p.y > camY - 60 && p.y < camY + H + 60) drawPed(p);
+  drawPlayer();
+  ctx.fillStyle = '#ffe066';
+  for (const b of bullets) ctx.fillRect(b.x - 3, b.y - 1.5, 6, 3);
+  for (const pt of particles) { ctx.globalAlpha = Math.max(0, pt.life / pt.max); ctx.fillStyle = pt.color; ctx.fillRect(pt.x - pt.size / 2, pt.y - pt.size / 2, pt.size, pt.size); }
+  ctx.globalAlpha = 1;
+  // markers
+  const s = currentStep();
+  if (s && state.missionActive && !state.dialogue) drawMarker(s.x, s.y, '#ffd60a', 'OBJECTIVE');
+  else if (!state.missionActive) { const g = missionGiverPos(state.missionIdx); if (g) drawMarker(g.x, g.y, '#ffd60a', MISSIONS[state.missionIdx] ? MISSIONS[state.missionIdx].giver.toUpperCase() : ''); }
+  if (state.taxi) { if (state.taxi.phase === 'pickup') drawMarker(state.taxi.x, state.taxi.y, '#4cc9f0', 'TAXI'); else drawMarker(state.taxi.dx, state.taxi.dy, '#06d6a0', 'DROP-OFF'); }
 }
 function drawMinimap() {
-  const mw = mm.width, mh = mm.height, sx = mw / WORLD_W, sy = mh / WORLD_H;
-  mmx.fillStyle = '#2b3a2e'; mmx.fillRect(0, 0, mw, mh);
-  mmx.fillStyle = '#1d7fa8'; mmx.fillRect(3160 * sx, 0, mw - 3160 * sx, mh);
-  mmx.strokeStyle = '#666'; mmx.lineWidth = 3;
-  for (let i = 0; i < 9; i++) { mmx.beginPath(); mmx.moveTo((i * BLOCK + ROAD / 2) * sx, 0); mmx.lineTo((i * BLOCK + ROAD / 2) * sx, mh); mmx.stroke(); }
-  for (let i = 0; i < 7; i++) { mmx.beginPath(); mmx.moveTo(0, (i * BLOCK + ROAD / 2) * sy); mmx.lineTo(mw, (i * BLOCK + ROAD / 2) * sy); mmx.stroke(); }
-  mmx.fillStyle = '#5b7fa6'; mmx.fillRect(world.policeStation.x * sx - 3, world.policeStation.y * sy - 3, 6, 6);
-  mmx.fillStyle = '#e63946'; mmx.fillRect(world.hospital.x * sx - 3, world.hospital.y * sy - 3, 6, 6);
-  let marker = null; if (G.missionActive) { const s = MISSIONS[G.missionIdx].steps[G.stepIdx]; marker = (s && s.type === 'chase' && G.chaseCar) ? G.chaseCar : s; } if (G.taxi) marker = G.taxi;
-  if (marker) { mmx.fillStyle = '#ffd166'; mmx.beginPath(); mmx.arc(marker.x * sx, marker.y * sy, 5 + Math.sin(performance.now() / 200) * 1.5, 0, 7); mmx.fill(); }
-  mmx.fillStyle = '#2e7bff'; for (const c of cops) if (!c.dead) mmx.fillRect(c.x * sx - 2, c.y * sy - 2, 4, 4);
-  const px = player.car ? player.car.x : player.x, py = player.car ? player.car.y : player.y, pa = player.car ? player.car.angle : player.angle;
-  mmx.save(); mmx.translate(px * sx, py * sy); mmx.rotate(pa); mmx.fillStyle = '#fff'; mmx.beginPath(); mmx.moveTo(7, 0); mmx.lineTo(-5, -4); mmx.lineTo(-5, 4); mmx.fill(); mmx.restore();
+  const mw = 218, mh = 164, mx = W - mw - 14, my = 14;
+  ctx.fillStyle = 'rgba(8,12,24,0.85)'; ctx.beginPath(); ctx.roundRect(mx - 4, my - 4, mw + 8, mh + 8, 8); ctx.fill();
+  ctx.save(); ctx.beginPath(); ctx.roundRect(mx, my, mw, mh, 6); ctx.clip();
+  ctx.fillStyle = '#2f5233'; ctx.fillRect(mx, my, mw, mh);
+  const sx = mw / WORLD_W, sy = mh / WORLD_H;
+  ctx.fillStyle = '#173f5f'; ctx.fillRect(mx, my + BEACH_Y * sy, mw, (WORLD_H - BEACH_Y) * sy);
+  ctx.strokeStyle = '#c9cdd4'; ctx.lineWidth = 3;
+  for (const rx of ROAD_XS) { ctx.beginPath(); ctx.moveTo(mx + rx * sx, my); ctx.lineTo(mx + rx * sx, my + mh); ctx.stroke(); }
+  for (const ry of ROAD_YS) { ctx.beginPath(); ctx.moveTo(mx, my + ry * sy); ctx.lineTo(mx + mw, my + ry * sy); ctx.stroke(); }
+  ctx.fillStyle = '#ffd60a';
+  for (const b of world.buildings) if (b.kind === 'police' || b.kind === 'hospital' || b.kind === 'safehouse') ctx.fillRect(mx + b.x * sx - 3, my + b.y * sy - 3, 6, 6);
+  ctx.fillStyle = '#ff2e4d';
+  for (const c of cops) if (!c.dead) ctx.fillRect(mx + c.x * sx - 2.5, my + c.y * sy - 2.5, 5, 5);
+  const s = currentStep();
+  const tgt = (state.missionActive && s) ? s : missionGiverPos(state.missionIdx);
+  if (tgt) { ctx.fillStyle = '#ffd60a'; ctx.beginPath(); ctx.arc(mx + tgt.x * sx, my + tgt.y * sy, 5 + Math.sin(elapsed * 5) * 1.5, 0, 7); ctx.fill(); ctx.strokeStyle = '#000'; ctx.stroke(); }
+  if (state.taxi) { ctx.fillStyle = '#4cc9f0'; ctx.beginPath(); ctx.arc(mx + (state.taxi.phase === 'pickup' ? state.taxi.x : state.taxi.dx) * sx, my + (state.taxi.phase === 'pickup' ? state.taxi.y : state.taxi.dy) * sy, 4, 0, 7); ctx.fill(); }
+  // player arrow
+  const px = mx + player.x * sx, py = my + player.y * sy, pa = player.car ? player.car.angle : player.angle;
+  ctx.translate(px, py); ctx.rotate(pa); ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.moveTo(8, 0); ctx.lineTo(-5, -5); ctx.lineTo(-5, 5); ctx.fill(); ctx.strokeStyle = '#ff6b35'; ctx.lineWidth = 1.5; ctx.stroke(); ctx.rotate(-pa); ctx.translate(-px, -py);
+  ctx.restore();
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 10px Arial'; ctx.textAlign = 'left'; ctx.fillText('SAN VERANO', mx + 4, my + mh + 16);
 }
-// ---------- shot scenes ----------
-function setupShot(name) {
-  G = freshState(); spawnTraffic(); peds = []; bullets = []; particles = []; skids = []; cops = [];
-  player = newPlayer(700, 700); G.cash = 850; player.cash = 850;
-  if (name === 'cover') { G.state = 'title'; G.time = 0.74; player.x = 900; player.y = 900; spawnPeds(40, 900, 900); }
-  if (name === 'drive') { G.state = 'play'; G.time = 0.45; const c = cars.find(x => !x.police) || cars[0]; c.x = 1150; c.y = 925; c.angle = 0; c.health = 100; c.driver = 'player'; player.car = c; player.x = c.x; player.y = c.y; c.speed = 150; G.objective = 'Cruise downtown — deliver Rosa to the Hospital'; spawnPeds(30, c.x, c.y); }
-  if (name === 'chase') { G.state = 'play'; G.time = 0.55; G.wanted = 3.5; const c = cars.find(x => !x.police) || cars[0]; c.x = 1560; c.y = 925; c.angle = 0; c.health = 100; c.driver = 'player'; player.car = c; c.speed = 200; for (let i = 0; i < 3; i++) { const pc = mkCar(c.x - 140 - i * 95, c.y + (i - 1) * 30, 0, '#dfe6ee', { police: true, driver: 'cop' }); pc.health = 100; cars.push(pc); cops.push(pc); } G.objective = 'Lose the SVPD!'; spawnPeds(24, c.x, c.y); }
-  if (name === 'mission') { G.state = 'play'; G.time = 0.4; player.x = 740; player.y = 880; G.missionIdx = 0; offerMission(); spawnPeds(26, player.x, player.y); }
-  if (player.car) player.car.health = 100; player.health = 100;
+function fmtTime() { const hh = Math.floor(state.time), mm = Math.floor((state.time - hh) * 60); return 'Day ' + state.day + '  ' + String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0'); }
+function drawHUD() {
+  // top-left panel
+  ctx.fillStyle = 'rgba(8,12,24,0.78)'; ctx.beginPath(); ctx.roundRect(12, 12, 268, 118, 10); ctx.fill();
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 15px Arial'; ctx.textAlign = 'left';
+  ctx.fillText('SAN VERANO', 24, 36);
+  ctx.fillStyle = '#8ecae6'; ctx.font = '12px Arial'; ctx.fillText(fmtTime() + (isNight() ? '  · Night' : ''), 150, 36);
+  // health
+  ctx.fillStyle = '#3a0d14'; ctx.fillRect(24, 48, 180, 15);
+  ctx.fillStyle = player.hp > 30 ? '#2ec4b6' : '#e63946'; ctx.fillRect(24, 48, 180 * Math.max(0, player.hp) / 100, 15);
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 11px Arial'; ctx.fillText('HP ' + Math.max(0, Math.ceil(player.hp)), 28, 60);
+  if (player.car) { ctx.fillStyle = '#222'; ctx.fillRect(24, 68, 180, 10); ctx.fillStyle = '#ffd166'; ctx.fillRect(24, 68, 180 * Math.max(0, player.car.hp) / 100, 10); ctx.fillStyle = '#fff'; ctx.font = '10px Arial'; ctx.fillText('CAR ' + Math.max(0, Math.ceil(player.car.hp)) + '%', 28, 77); }
+  ctx.fillStyle = '#ffd60a'; ctx.font = 'bold 19px Arial'; ctx.fillText('$' + state.cash, 24, 104);
+  ctx.fillStyle = '#fff'; ctx.font = '12px Arial';
+  const wname = player.weapon === 'smg' ? 'SMG' : 'PISTOL';
+  ctx.fillText((player.car ? 'DRIVING' : wname + '  Ammo: ' + player.ammo[player.weapon]), 110, 104);
+  ctx.fillText('KOs: ' + state.kills + '   Story: ' + Math.min(state.missionIdx + 1, MISSIONS.length) + '/' + MISSIONS.length, 24, 122);
+  // wanted stars top centre
+  ctx.font = '26px Arial'; ctx.textAlign = 'center';
+  for (let i = 0; i < 5; i++) { ctx.fillStyle = i < state.wanted ? '#ffd60a' : 'rgba(255,255,255,0.25)'; ctx.fillText('★', W / 2 - 64 + i * 32, 40); }
+  if (state.bustedT > 0.2 && !player.car) { ctx.fillStyle = '#ff2e4d'; ctx.font = 'bold 16px Arial'; ctx.fillText('BUSTED...', W / 2, 66); }
+  // objective bottom-left
+  ctx.fillStyle = 'rgba(8,12,24,0.8)'; ctx.beginPath(); ctx.roundRect(12, H - 74, Math.min(640, W - 24), 60, 10); ctx.fill();
+  ctx.fillStyle = '#ffd60a'; ctx.font = 'bold 12px Arial'; ctx.textAlign = 'left'; ctx.fillText('OBJECTIVE', 24, H - 52);
+  ctx.fillStyle = '#fff'; ctx.font = '14px Arial'; ctx.fillText(state.objective, 24, H - 30);
+  if (state.timerOn) { ctx.fillStyle = state.timer < 15 ? '#ff2e4d' : '#ffd60a'; ctx.font = 'bold 20px Arial'; ctx.textAlign = 'right'; ctx.fillText(Math.ceil(state.timer) + 's', W - 24, H - 30); ctx.textAlign = 'left'; }
+  if (state.msgT > 0) { ctx.fillStyle = 'rgba(8,12,24,0.85)'; const tw = state.msg.length * 8.4 + 28; ctx.beginPath(); ctx.roundRect(W / 2 - tw / 2, 84, tw, 34, 8); ctx.fill(); ctx.fillStyle = '#fff'; ctx.font = 'bold 14px Arial'; ctx.textAlign = 'center'; ctx.fillText(state.msg, W / 2, 106); ctx.textAlign = 'left'; }
+  // controls hint
+  ctx.fillStyle = 'rgba(255,255,255,0.65)'; ctx.font = '11px Arial'; ctx.fillText('WASD move · E car · F/click punch · Click shoot · 1/2 weapons · Space brake · Esc pause · M mute', 14, H - 84);
+  drawMinimap();
 }
+function drawDialogue() {
+  if (!state.dialogue) return;
+  const d = state.dialogue, line = d.lines[d.idx]; if (!line) return;
+  const speaker = line[0], text = line[1];
+  const col = (CHARACTERS[speaker] && CHARACTERS[speaker].color) || '#ff6b35';
+  ctx.fillStyle = 'rgba(5,8,18,0.92)'; ctx.beginPath(); ctx.roundRect(90, H - 196, W - 180, 108, 12); ctx.fill();
+  ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.stroke();
+  ctx.fillStyle = col; ctx.beginPath(); ctx.arc(140, H - 142, 30, 0, 7); ctx.fill();
+  ctx.fillStyle = '#14213d'; ctx.font = 'bold 24px Arial'; ctx.textAlign = 'center'; ctx.fillText(speaker[0], 140, H - 134);
+  ctx.textAlign = 'left'; ctx.fillStyle = col; ctx.font = 'bold 17px Arial'; ctx.fillText(speaker + (CHARACTERS[speaker] ? ' — ' + CHARACTERS[speaker].role : ' — You'), 186, H - 168);
+  ctx.fillStyle = '#fff'; ctx.font = '16px Arial';
+  // wrap
+  const words = text.split(' '); let ln = '', yy = H - 140;
+  for (const wd of words) { if (ctx.measureText(ln + wd).width > W - 420) { ctx.fillText(ln, 186, yy); yy += 22; ln = ''; } ln += wd + ' '; }
+  ctx.fillText(ln, 186, yy);
+  ctx.fillStyle = '#ffd60a'; ctx.font = '12px Arial'; ctx.fillText('Click or Enter ▸  (' + (d.idx + 1) + '/' + d.lines.length + ')', 186, H - 100);
+}
+function drawTitle() {
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, 'rgba(20,8,50,0.55)'); g.addColorStop(0.55, 'rgba(120,20,90,0.35)'); g.addColorStop(1, 'rgba(6,40,70,0.6)');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#7ee8fa'; ctx.font = 'bold 24px Arial'; ctx.fillText('★  W E L C O M E   T O  ★', W / 2, H * 0.24);
+  ctx.font = '900 84px Arial'; ctx.fillStyle = '#ff2e88'; ctx.fillText('SAN VERANO', W / 2 + 3, H * 0.24 + 86 + 3);
+  ctx.fillStyle = '#ffd60a'; ctx.fillText('SAN VERANO', W / 2, H * 0.24 + 86);
+  ctx.font = 'italic bold 30px Arial'; ctx.fillStyle = '#7ee8fa'; ctx.fillText('—  N E O N   C O A S T  —', W / 2, H * 0.24 + 128);
+  ctx.fillStyle = '#fff'; ctx.font = '15px Arial'; ctx.fillText('An original open-world crime story · 6 story missions · police, traffic, taxi fares & the whole neon coast', W / 2, H * 0.24 + 162);
+  drawButton(W / 2 - 130, H * 0.58, 260, 52, '▶  NEW GAME', '#e63946');
+  const has = !!loadSave();
+  drawButton(W / 2 - 130, H * 0.58 + 66, 260, 52, has ? '↻  CONTINUE' : '↻  CONTINUE (no save)', has ? '#2a9d8f' : '#555f6b');
+  ctx.fillStyle = 'rgba(255,255,255,0.8)'; ctx.font = '12px Arial';
+  ctx.fillText('WASD / Arrows · Shift sprint · E enter car · Mouse aim, click shoot · F punch · Space handbrake · M mute', W / 2, H * 0.58 + 150);
+  ctx.textAlign = 'left';
+}
+let buttons = [];
+function drawButton(x, y, w, h, label, color) {
+  buttons.push({ x, y, w, h, label });
+  ctx.fillStyle = color; ctx.beginPath(); ctx.roundRect(x, y, w, h, 10); ctx.fill();
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 19px Arial'; ctx.textAlign = 'center'; ctx.fillText(label, x + w / 2, y + h / 2 + 7); ctx.textAlign = 'left';
+}
+function drawPause() {
+  ctx.fillStyle = 'rgba(4,6,14,0.72)'; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#ffd60a'; ctx.font = '900 46px Arial'; ctx.textAlign = 'center'; ctx.fillText('PAUSED', W / 2, H * 0.36);
+  ctx.fillStyle = '#fff'; ctx.font = '16px Arial';
+  ctx.fillText('Cash $' + state.cash + ' · Story mission ' + Math.min(state.missionIdx + 1, MISSIONS.length) + ' of ' + MISSIONS.length + ' · Day ' + state.day, W / 2, H * 0.44);
+  drawButton(W / 2 - 120, H * 0.5, 240, 48, 'RESUME', '#2a9d8f');
+  drawButton(W / 2 - 120, H * 0.5 + 60, 240, 48, 'SAVE GAME', '#4361ee');
+  drawButton(W / 2 - 120, H * 0.5 + 120, 240, 48, 'TITLE SCREEN', '#555f6b');
+  ctx.textAlign = 'left';
+}
+function drawEnd(kind) {
+  ctx.fillStyle = kind === 'wasted' ? 'rgba(90,4,10,0.78)' : 'rgba(6,20,60,0.8)'; ctx.fillRect(0, 0, W, H);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = kind === 'wasted' ? '#ff2e4d' : '#7ee8fa'; ctx.font = '900 76px Arial';
+  ctx.fillText(kind === 'wasted' ? 'WASTED' : 'BUSTED', W / 2, H * 0.44);
+  ctx.fillStyle = '#fff'; ctx.font = '17px Arial';
+  ctx.fillText(kind === 'wasted' ? 'You wake up at Hospital Verano. The city charged you for the bandages.' : 'The San Verano police book you at the station. Bail is not free.', W / 2, H * 0.52);
+  ctx.fillText('Respawning…', W / 2, H * 0.58);
+  ctx.textAlign = 'left';
+}
+function render() {
+  buttons = [];
+  ctx.save();
+  const shx = state.shake ? (rnd() - 0.5) * state.shake : 0, shy = state.shake ? (rnd() - 0.5) * state.shake : 0;
+  ctx.translate(-camX + shx, -camY + shy);
+  drawWorld(); drawEntities();
+  ctx.restore();
+  const tint = dayTint();
+  if (tint.a > 0) { ctx.fillStyle = 'rgba(' + tint.color + ',' + tint.a + ')'; ctx.fillRect(0, 0, W, H); }
+  if (state.screen === 'title') { drawTitle(); return; }
+  drawHUD();
+  if (state.gameWon && state.missionIdx >= MISSIONS.length) { ctx.fillStyle = 'rgba(255,214,10,0.9)'; ctx.font = 'bold 15px Arial'; ctx.textAlign = 'center'; ctx.fillText('★ STORY COMPLETE — free roam San Verano ★', W / 2, 74); ctx.textAlign = 'left'; }
+  drawDialogue();
+  if (state.screen === 'pause') drawPause();
+  if (state.screen === 'wasted') drawEnd('wasted');
+  if (state.screen === 'busted') drawEnd('busted');
+}
+function handleMenuClick(x, y) {
+  audio.ensure();
+  for (const b of buttons) {
+    if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
+      if (b.label.includes('NEW GAME')) newGame();
+      else if (b.label.includes('CONTINUE')) continueGame();
+      else if (b.label.includes('RESUME')) state.screen = 'play';
+      else if (b.label.includes('SAVE')) { saveGame(); toast('Saved'); state.screen = 'play'; }
+      else if (b.label.includes('TITLE')) state.screen = 'title';
+    }
+  }
+}
+function newGame() {
+  try { localStorage.removeItem(SAVE_KEY); } catch (e) {}
+  state.cash = 100; state.missionIdx = 0; state.missionStep = -1; state.missionActive = false; state.wanted = 0; state.wantedHeat = 0; state.gameWon = false; state.kills = 0;
+  player.hp = 100; player.x = 900; player.y = 1470; player.car = null; player.ammo = { pistol: 60, smg: 0 }; player.hasSmg = false; player.weapon = 'pistol';
+  state.time = 10; state.objective = 'Talk to Rosa at Casa Rosa (yellow marker)';
+  spawnTraffic(); spawnPeds(); cops = [];
+  state.screen = 'play';
+  showDialogue([['Rosa', 'Welcome to San Verano, Nico. Sun, neon — and opportunity.'], ['Rosa', 'Walk to me at Casa Rosa any time to start work. Press E by a car to drive. Stay sharp!']], () => {});
+  saveGame();
+}
+function continueGame() {
+  const s = loadSave(); if (!s) { toast('No save yet — start a New Game'); return; }
+  state.cash = s.cash; state.missionIdx = Math.min(s.mission, MISSIONS.length);
+  player.x = s.x || 900; player.y = s.y || 1470; player.hp = s.hp || 100; player.car = null;
+  state.objective = state.missionIdx >= MISSIONS.length ? 'Story complete! Free roam' : 'Talk to ' + MISSIONS[state.missionIdx].giver + ' (yellow marker)';
+  spawnTraffic(); spawnPeds(); cops = [];
+  state.screen = 'play'; toast('Save loaded');
+}
+
+// ---------- shot scenes (deterministic screenshots) ----------
+function setupShot() {
+  spawnTraffic(); spawnPeds();
+  state.cash = 1450; player.hp = 100;
+  if (shotMode === 'cover') {
+    state.time = 18.4; player.x = 1200; player.y = 1180; player.car = null;
+    camX = player.x - W / 2; camY = player.y - H / 2; state.screen = 'title';
+  } else if (shotMode === 'drive') {
+    state.time = 11; state.screen = 'play';
+    const c = cars.find(v => v.kind === 'traffic') || cars[0];
+    c.x = 1450; c.y = 1074; c.angle = 0; c.speed = 230; c.hp = 100; c.color = '#e63946';
+    player.car = c; player.x = c.x; player.y = c.y; c.driver = true;
+    state.objective = 'Drive Diego to the workshop (Taller Ruedas)';
+    camX = c.x - W / 2; camY = c.y - H / 2;
+  } else if (shotMode === 'chase') {
+    state.time = 16; state.screen = 'play'; state.wanted = 4; state.wantedHeat = 13;
+    const c = cars.find(v => v.kind === 'traffic') || cars[0];
+    c.x = 1700; c.y = 1074; c.angle = 0; c.speed = 300; c.hp = 100; c.color = '#ffd60a';
+    player.car = c; player.x = c.x; player.y = c.y;
+    for (let i = 0; i < 3; i++) { const pc = makeCar(c.x - 130 - i * 95, c.y + (i % 2 ? 34 : -30), 0, '#dfe6ee', 'cop'); pc.isCop = true; pc.speed = 290; cops.push(pc); cars.push(pc); }
+    spawnFootCop();
+    state.objective = 'Escape the police pursuit!';
+    burst(c.x - 40, c.y, '#ffe066', 10, 120);
+    camX = c.x - W / 2; camY = c.y - H / 2;
+  } else if (shotMode === 'mission') {
+    state.time = 14.5; state.screen = 'play';
+    player.x = 905; player.y = 1445; player.car = null;
+    state.missionIdx = 0;
+    showDialogue(MISSIONS[0].intro, () => {});
+    state.objective = MISSIONS[0].steps[0].text;
+    camX = player.x - W / 2; camY = player.y - H / 2;
+  } else {
+    state.screen = 'title'; state.time = 18.4; player.x = 1200; player.y = 1180; camX = player.x - W / 2; camY = player.y - H / 2;
+  }
+  camX = Math.max(0, Math.min(WORLD_W - W, camX)); camY = Math.max(0, Math.min(WORLD_H - H, camY));
+}
+
+// ---------- boot + loop ----------
+spawnTraffic(); spawnPeds();
+if (shotMode) setupShot();
 let last = performance.now();
-function loop(now) { const dt = Math.min(0.05, (now - last) / 1000); last = now; btns.length = 0; if (G && G.state === 'play') update(dt); draw(); requestAnimationFrame(loop); }
-if (shot) setupShot(shot); else { G = freshState(); spawnTraffic(); player = newPlayer(900, 900); spawnPeds(40, 900, 900); G.state = 'title'; }
-requestAnimationFrame(loop);
-window.__game = { get G() { return G; }, get player() { return player; }, startGame };
+function frame(now) {
+  let dt = (now - last) / 1000; last = now;
+  if (dt > 0.05) dt = 0.05;
+  if (state.screen === 'play' || state.screen === 'pause') update(state.screen === 'play' ? dt : 0);
+  else { elapsed += dt; state.time += dt / 120; }
+  render();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
